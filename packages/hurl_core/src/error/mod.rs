@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,204 +15,387 @@
  * limitations under the License.
  *
  */
-use core::cmp;
+use std::cmp::max;
 
 use crate::ast::SourceInfo;
-use crate::parser::{self, JsonErrorVariant, ParseError};
+use crate::text::{Format, Style, StyledString};
 
-pub trait Error {
+pub trait DisplaySourceError {
     fn source_info(&self) -> SourceInfo;
     fn description(&self) -> String;
-    fn fixme(&self) -> String;
-}
+    fn fixme(&self, content: &[&str]) -> StyledString;
 
-impl Error for parser::Error {
-    fn source_info(&self) -> SourceInfo {
-        SourceInfo {
-            start: self.pos,
-            end: self.pos,
-        }
+    /// Returns the constructed message for the error
+    ///
+    /// It may include:
+    ///
+    /// - source line
+    /// - column position and number of characters (with one or more carets)
+    ///
+    /// Examples:
+    ///
+    /// ```text
+    /// GET abc
+    ///     ^ expecting http://, https:// or {{
+    /// ```
+    ///
+    /// ```text
+    /// HTTP/1.0 200
+    ///          ^^^ actual value is <404>
+    /// ```
+    ///
+    /// ```text
+    /// jsonpath "$.count" >= 5
+    ///   actual:   integer <2>
+    ///   expected: greater than integer <5>
+    /// ```
+    ///
+    /// ```text
+    /// {
+    ///    "name": "John",
+    ///-   "age": 27
+    ///+   "age": 28
+    /// }
+    /// ```
+    fn message(&self, content: &[&str]) -> StyledString {
+        let mut text = StyledString::new();
+        add_source_line(&mut text, content, self.source_info().start.line);
+        text.append(self.fixme(content));
+
+        let error_line = self.source_info().start.line;
+        add_line_info_prefix(&text, content, error_line)
     }
 
-    fn description(&self) -> String {
-        match self.inner {
-            ParseError::DuplicateSection => "Parsing section".to_string(),
-            ParseError::EscapeChar => "Parsing escape character".to_string(),
-            ParseError::Expecting { .. } => "Parsing literal".to_string(),
-            ParseError::Filename => "Parsing filename".to_string(),
-            ParseError::GraphQlVariables => "Parsing GraphQL variables".to_string(),
-            ParseError::InvalidCookieAttribute => "Parsing cookie attribute".to_string(),
-            ParseError::Json(_) => "Parsing JSON".to_string(),
-            ParseError::JsonPathExpr => "Parsing JSONPath expression".to_string(),
-            ParseError::Method { .. } => "Parsing method".to_string(),
-            ParseError::Multiline => "Parsing multiline".to_string(),
-            ParseError::OddNumberOfHexDigits => "Parsing hex bytearray".to_string(),
-            ParseError::Predicate => "Parsing predicate".to_string(),
-            ParseError::PredicateValue => "Parsing predicate value".to_string(),
-            ParseError::RegexExpr { .. } => "Parsing regex".to_string(),
-            ParseError::RequestSection => "Parsing section".to_string(),
-            ParseError::RequestSectionName { .. } => "Parsing request section name".to_string(),
-            ParseError::ResponseSection => "Parsing section".to_string(),
-            ParseError::ResponseSectionName { .. } => "Parsing response section name".to_string(),
-            ParseError::Space => "Parsing space".to_string(),
-            ParseError::Status => "Parsing status code".to_string(),
-            ParseError::TemplateVariable => "Parsing template variable".to_string(),
-            ParseError::UrlIllegalCharacter(_) => "Parsing URL".to_string(),
-            ParseError::UrlInvalidStart => "Parsing URL".to_string(),
-            ParseError::Version => "Parsing version".to_string(),
-            ParseError::XPathExpr => "Parsing XPath expression".to_string(),
-            // TODO: implement all variants
-            _ => format!("{self:?}"),
-        }
-    }
+    /// Returns the string representation of an `error`, given `lines` of content and a `filename`.
+    ///
+    /// The source information where the error occurred can be retrieved in `error`; optionally,
+    /// `entry_src_info` is the optional source information for the entry where the error happened.
+    /// If `colored` is true, the string use ANSI escape codes to add color and improve the readability
+    /// of the representation.
+    ///
+    /// Example:
+    ///
+    ///
+    ///
+    /// ```text
+    /// Assert status code                        | > description()
+    ///  --> test.hurl:2:10                       | > add_filename_with_sourceinfo()
+    ///   |                                       |
+    ///   | GET http://foo.com                    | > add_entry_line()
+    ///   | ...                                   |
+    /// 2 | HTTP/1.0 200                          | > message()
+    ///   |          ^^^ actual value is <404>    | >
+    ///   |                                       |
+    /// ```
+    fn to_string(
+        &self,
+        filename: &str,
+        content: &str,
+        entry_src_info: Option<SourceInfo>,
+        format: OutputFormat,
+    ) -> String {
+        let mut text = StyledString::new();
+        let lines = content.lines().collect::<Vec<_>>();
 
-    fn fixme(&self) -> String {
-        match self.inner.clone() {
-            ParseError::DuplicateSection => "the section is already defined".to_string(),
-            ParseError::EscapeChar => "the escaping sequence is not valid".to_string(),
-            ParseError::Expecting { value } => format!("expecting '{value}'"),
-            ParseError::Filename => "expecting a filename".to_string(),
-            ParseError::GraphQlVariables => {
-                "GraphQL variables is not a valid JSON object".to_string()
-            }
-            ParseError::InvalidCookieAttribute => "the cookie attribute is not valid".to_string(),
-            ParseError::Json(variant) => match variant {
-                JsonErrorVariant::TrailingComma => "trailing comma is not allowed".to_string(),
-                JsonErrorVariant::EmptyElement => {
-                    "expecting an element; found empty element instead".to_string()
-                }
-                JsonErrorVariant::ExpectingElement => {
-                    "expecting a boolean, number, string, array, object or null".to_string()
-                }
-            },
-            ParseError::JsonPathExpr => "expecting a JSONPath expression".to_string(),
-            ParseError::Method { name } => {
-                let valid_values = [
-                    "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
-                ];
-                let default =
-                    "Valid values are GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH";
-                let did_you_mean = did_you_mean(&valid_values, name.as_str(), default);
-                format!("the HTTP method <{name}> is not valid. {did_you_mean}")
-            }
-            ParseError::Multiline => "the multiline is not valid".to_string(),
-            ParseError::OddNumberOfHexDigits => {
-                "expecting an even number of hex digits".to_string()
-            }
-            ParseError::Predicate => "expecting a predicate".to_string(),
-            ParseError::PredicateValue => "invalid predicate value".to_string(),
-            ParseError::RegexExpr { message } => format!("invalid Regex expression: {message}"),
-            ParseError::RequestSection => "this is not a valid section for a request".to_string(),
-            ParseError::RequestSectionName { name } => {
-                let valid_values = [
-                    "QueryStringParams",
-                    "FormParams",
-                    "MultipartFormData",
-                    "Cookies",
-                    "Options",
-                ];
-                let default = "Valid values are QueryStringParams, FormParams, MultipartFormData, Cookies or Options";
-                let did_you_mean = did_you_mean(&valid_values, name.as_str(), default);
-                format!("the section is not valid. {did_you_mean}")
-            }
-            ParseError::ResponseSection => "this is not a valid section for a response".to_string(),
-            ParseError::ResponseSectionName { name } => {
-                let valid_values = ["Captures", "Asserts"];
-                let default = "Valid values are Captures or Asserts";
-                let did_your_mean = did_you_mean(&valid_values, name.as_str(), default);
-                format!("the section is not valid. {did_your_mean}")
-            }
-            ParseError::Space => "expecting a space".to_string(),
-            ParseError::Status => "HTTP status code is not valid".to_string(),
-            ParseError::TemplateVariable => "expecting a variable".to_string(),
-            ParseError::UrlIllegalCharacter(c) => format!("illegal character <{c}>"),
-            ParseError::UrlInvalidStart => "expecting http://, https:// or {{".to_string(),
-            ParseError::Version => {
-                "HTTP version must be HTTP, HTTP/1.0, HTTP/1.1 or HTTP/2".to_string()
-            }
-            ParseError::XPathExpr => "expecting a XPath expression".to_string(),
+        let error_line = self.source_info().start.line;
+        let error_column = self.source_info().start.column;
 
-            // TODO: implement all variants
-            _ => format!("{self:?}"),
+        // Push one-line description of the error
+        text.push_with(&self.description(), Style::new().bold());
+        text.push("\n");
+
+        // We build the prefix
+        let loc_max_width = max(lines.len().to_string().len(), 2);
+        let spaces = " ".repeat(loc_max_width);
+        let separator = "|";
+        let mut prefix = StyledString::new();
+        prefix.push_with(&format!("{spaces} {separator}"), Style::new().blue().bold());
+
+        // Add filename, with a left margin space for error line number.
+        add_filename_with_sourceinfo(&mut text, &spaces, filename, error_line, error_column);
+
+        // First line of the error message
+        text.append(prefix.clone());
+
+        // We can have an optional source line for context
+        let entry_line = entry_src_info.map(|e| e.start.line);
+        if let Some(entry_line) = entry_line {
+            add_entry_line(&mut text, &lines, error_line, entry_line, &prefix);
         }
+
+        text.append(self.message(&lines));
+        format_error_message(&text, format)
     }
 }
 
-fn did_you_mean(valid_values: &[&str], actual: &str, default: &str) -> String {
-    if let Some(suggest) = suggestion(valid_values, actual) {
-        format!("Did you mean {suggest}?")
+/// Show column position with carets
+pub fn add_carets(message: &str, source_info: SourceInfo, content: &[&str]) -> String {
+    let error_line = source_info.start.line;
+    let error_column = source_info.start.column;
+    // Error source info start and end can be on different lines, we insure a minimum width.
+    let width = if source_info.end.column > error_column {
+        source_info.end.column - error_column
     } else {
-        default.to_string()
+        1
+    };
+    let line_raw = content.get(error_line - 1).unwrap();
+    let prefix = get_carets(line_raw, error_column, width);
+
+    let mut s = String::new();
+    for (i, line) in message.lines().enumerate() {
+        if i == 0 {
+            s.push_str(format!("{prefix}{line}").as_str());
+        } else {
+            s.push('\n');
+            if !line.is_empty() {
+                s.push_str(" ".repeat(prefix.len()).as_str());
+            }
+            s.push_str(line);
+        };
+    }
+    s
+}
+
+/// Format used by to_string
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OutputFormat {
+    Plain,
+    Terminal(bool), // Replace \r\n by \n
+}
+
+pub fn add_line_info_prefix(
+    text: &StyledString,
+    content: &[&str],
+    error_line: usize,
+) -> StyledString {
+    let text = text.clone();
+    let separator = "|";
+
+    let loc_max_width = max(content.len().to_string().len(), 2);
+    let spaces = " ".repeat(loc_max_width);
+    let mut prefix = StyledString::new();
+    prefix.push_with(
+        format!("{spaces} {separator}").as_str(),
+        Style::new().blue().bold(),
+    );
+    let mut prefix_with_number = StyledString::new();
+    prefix_with_number.push_with(
+        format!("{error_line:>loc_max_width$} {separator}").as_str(),
+        Style::new().blue().bold(),
+    );
+
+    let mut text2 = StyledString::new();
+    for (i, line) in text.split('\n').iter().enumerate() {
+        text2.push("\n");
+        text2.append(if i == 0 {
+            prefix_with_number.clone()
+        } else {
+            prefix.clone()
+        });
+        text2.append(line.clone());
+    }
+
+    //  Appends additional empty line
+    if !text2.ends_with("|") {
+        text2.push("\n");
+        text2.append(prefix.clone());
+    }
+
+    text2
+}
+
+/// Generate carets for the given source_line/source_info
+fn get_carets(line_raw: &str, error_column: usize, width: usize) -> String {
+    //  We take tabs into account because we have normalize the display of the error line by replacing
+    //  tabs with 4 spaces.
+    let mut tab_shift = 0;
+    for (i, c) in line_raw.chars().enumerate() {
+        if i >= (error_column - 1) {
+            break;
+        };
+        if c == '\t' {
+            tab_shift += 1;
+        }
+    }
+
+    let mut prefix = " ".repeat(error_column + tab_shift * 3);
+    prefix.push_str("^".repeat(width).as_str());
+    prefix.push(' ');
+    prefix
+}
+
+pub fn add_source_line(text: &mut StyledString, content: &[&str], line: usize) {
+    let line = content.get(line - 1).unwrap();
+    let line = line.replace('\t', "    ");
+    text.push(" ");
+    text.push(&line);
+    text.push("\n");
+}
+
+fn add_filename_with_sourceinfo(
+    text: &mut StyledString,
+    spaces: &str,
+    filename: &str,
+    error_line: usize,
+    error_column: usize,
+) {
+    text.push(spaces);
+    text.push_with("-->", Style::new().blue().bold());
+    text.push(format!(" {filename}:{error_line}:{error_column}").as_str());
+    text.push("\n");
+}
+
+fn add_entry_line(
+    text: &mut StyledString,
+    lines: &[&str],
+    error_line: usize,
+    entry_line: usize,
+    prefix: &StyledString,
+) {
+    if entry_line != error_line {
+        let line = lines.get(entry_line - 1).unwrap();
+        let line = line.replace('\t', "    ");
+        text.push("\n");
+        text.append(prefix.clone());
+        text.push(" ");
+        text.push_with(&line, Style::new().bright_black());
+    }
+
+    if error_line - entry_line > 1 {
+        text.push("\n");
+        text.append(prefix.clone());
+        text.push_with(" ...", Style::new().bright_black());
     }
 }
 
-fn suggestion(valid_values: &[&str], actual: &str) -> Option<String> {
-    for value in valid_values {
-        if levenshtein_distance(
-            value.to_lowercase().as_str(),
-            actual.to_lowercase().as_str(),
-        ) < 2
-        {
-            return Some(value.to_string());
+fn format_error_message(message: &StyledString, format: OutputFormat) -> String {
+    let colored = format == OutputFormat::Terminal(true);
+    let message = if colored {
+        message.to_string(Format::Ansi)
+    } else {
+        message.to_string(Format::Plain)
+    };
+
+    match format {
+        OutputFormat::Terminal(_) => {
+            message.replace("\r\n", "\n") // CRLF must be replaced by LF in the terminal
         }
+        OutputFormat::Plain => message,
     }
-    None
-}
-
-// From https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#Rust
-fn levenshtein_distance(s1: &str, s2: &str) -> usize {
-    let v1: Vec<char> = s1.chars().collect();
-    let v2: Vec<char> = s2.chars().collect();
-
-    fn min3<T: Ord>(v1: T, v2: T, v3: T) -> T {
-        cmp::min(v1, cmp::min(v2, v3))
-    }
-    fn delta(x: char, y: char) -> usize {
-        usize::from(x != y)
-    }
-
-    let mut column: Vec<usize> = (0..=v1.len()).collect();
-    for x in 1..=v2.len() {
-        column[0] = x;
-        let mut lastdiag = x - 1;
-        for y in 1..=v1.len() {
-            let olddiag = column[y];
-            column[y] = min3(
-                column[y] + 1,
-                column[y - 1] + 1,
-                lastdiag + delta(v1[y - 1], v2[x - 1]),
-            );
-            lastdiag = olddiag;
-        }
-    }
-    column[v1.len()]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reader::Pos;
+    use crate::text::{Format, Style};
 
     #[test]
-    fn test_levenshtein() {
-        assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
-        assert_eq!(levenshtein_distance("Saturday", "Sunday"), 3);
+    fn test_add_carets() {
+        // `Hello World`
+        // ^^^^^^^^^^^^^ actual value is <Hello World!>
+        assert_eq!(
+            add_carets(
+                "actual value is <Hello World!>",
+                SourceInfo::new(Pos::new(1, 1), Pos::new(1, 14)),
+                &["`Hello World`"]
+            ),
+            " ^^^^^^^^^^^^^ actual value is <Hello World!>".to_string()
+        );
     }
 
     #[test]
-    fn test_suggestion() {
-        let valid_values = ["Captures", "Asserts"];
+    fn test_get_carets() {
+        // `Hello World`
+        // ^^^^^^^^^^^^^ actual value is <Hello World!>
         assert_eq!(
-            suggestion(&valid_values, "Asserts"),
-            Some("Asserts".to_string())
+            get_carets("`Hello World`", 1, 13),
+            " ^^^^^^^^^^^^^ ".to_string()
+        );
+
+        // Content-Length: 200
+        //                 ^^^ actual value is <12>
+        assert_eq!(
+            get_carets("Content-Length: 200", 17, 3),
+            "                 ^^^ ".to_string()
+        );
+
+        // With a tab instead of a space
+        // Content-Length:    200
+        //                    ^^^ actual value is <12>
+        assert_eq!(
+            get_carets("Content-Length:\t200", 17, 3),
+            "                    ^^^ ".to_string()
+        );
+    }
+
+    #[test]
+    fn test_diff_error() {
+        crate::text::init_crate_colored();
+
+        let content = r#"GET http://localhost:8000/failed/multiline/json
+HTTP 200
+```
+{
+  "name": "John",
+  "age": 27
+}
+```
+"#;
+        let filename = "test.hurl";
+        struct E;
+        impl DisplaySourceError for E {
+            fn source_info(&self) -> SourceInfo {
+                SourceInfo::new(Pos::new(4, 1), Pos::new(4, 0))
+            }
+
+            fn description(&self) -> String {
+                "Assert body value".to_string()
+            }
+
+            fn fixme(&self, _lines: &[&str]) -> StyledString {
+                let mut diff = StyledString::new();
+                diff.push(" {\n   \"name\": \"John\",\n");
+                diff.push_with("-  \"age\": 27", Style::new().red());
+                diff.push("\n");
+                diff.push_with("+  \"age\": 28", Style::new().green());
+                diff.push("\n }\n");
+                diff
+            }
+            fn message(&self, lines: &[&str]) -> StyledString {
+                let s = self.fixme(lines);
+                add_line_info_prefix(&s, &[], 4)
+            }
+        }
+        let error = E;
+
+        let lines = content.lines().collect::<Vec<_>>();
+        assert_eq!(
+            error.message(&lines).to_string(Format::Plain),
+            r#"
+ 4 | {
+   |   "name": "John",
+   |-  "age": 27
+   |+  "age": 28
+   | }
+   |"#
         );
         assert_eq!(
-            suggestion(&valid_values, "Assert"),
-            Some("Asserts".to_string())
+            error.message(&lines).to_string(Format::Ansi),
+            "\n\u{1b}[1;34m 4 |\u{1b}[0m {\n\u{1b}[1;34m   |\u{1b}[0m   \"name\": \"John\",\n\u{1b}[1;34m   |\u{1b}[0m\u{1b}[31m-  \"age\": 27\u{1b}[0m\n\u{1b}[1;34m   |\u{1b}[0m\u{1b}[32m+  \"age\": 28\u{1b}[0m\n\u{1b}[1;34m   |\u{1b}[0m }\n\u{1b}[1;34m   |\u{1b}[0m"
         );
+
         assert_eq!(
-            suggestion(&valid_values, "assert"),
-            Some("Asserts".to_string())
+            error.to_string(filename, content, None, OutputFormat::Terminal(false)),
+            r#"Assert body value
+  --> test.hurl:4:1
+   |
+ 4 | {
+   |   "name": "John",
+   |-  "age": 27
+   |+  "age": 28
+   | }
+   |"#
         );
-        assert_eq!(suggestion(&valid_values, "asser"), None);
     }
 }

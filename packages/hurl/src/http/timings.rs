@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ use curl::easy::Easy;
 
 use crate::http::easy_ext;
 
-/// Timing information for an HTTP transfer.
+/// Timing information for an HTTP transfer (see <https://hurl.dev/docs/response.html#timings>).
 // See [`easy_ext::namelookup_time_t`], [`easy_ext::connect_time_t`], [`easy_ext::app_connect_time_t`],
 // [`easy_ext::pre_transfer_time_t`], [`easy_ext::start_transfer_time_t`] and [`easy_ext::total_time_t`]
 // for fields definition.

@@ -1,6 +1,7 @@
-from flask import request
-from app import app
 import json
+
+from app import app
+from flask import request
 
 
 @app.route("/variables", methods=["POST"])
@@ -20,7 +21,7 @@ def variables():
     data = json.loads(s)
     assert data["name"] == "Jennifer"
     assert data["age"] == 30
-    assert data["female"] == True
+    assert data["female"] is True
     assert data["id"] == "123"
     assert data["height"] == 1.7
     assert data["a_null"] is None

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,57 +15,57 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
 use hurl_core::ast::{SourceInfo, Template};
 
 use crate::jsonpath;
 use crate::runner::template::eval_template;
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value, VariableSet};
 
+/// Evaluates a JSONPath expression `expr` against a `value`.
 pub fn eval_jsonpath(
     value: &Value,
     expr: &Template,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
-        Value::String(json) => eval_jsonpath_string(json, expr, variables, source_info),
+        Value::String(text) => {
+            let json = match serde_json::from_str(text) {
+                Err(_) => {
+                    return Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::QueryInvalidJson,
+                        false,
+                    ));
+                }
+                Ok(v) => v,
+            };
+            eval_jsonpath_json(&json, expr, variables)
+        }
         v => {
-            let inner = RunnerError::FilterInvalidInput(v._type());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.kind().to_string());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
-pub fn eval_jsonpath_string(
-    json: &str,
+pub fn eval_jsonpath_json(
+    json: &serde_json::Value,
     expr: &Template,
-    variables: &HashMap<String, Value>,
-    source_info: SourceInfo,
-) -> Result<Option<Value>, Error> {
-    let value = eval_template(expr, variables)?;
-    let expr_source_info = &expr.source_info;
-    let jsonpath_query = match jsonpath::parse(value.as_str()) {
+    variables: &VariableSet,
+) -> Result<Option<Value>, RunnerError> {
+    let expr_str = eval_template(expr, variables)?;
+    let expr_source_info = expr.source_info;
+    let jsonpath_query = match jsonpath::parse(&expr_str) {
         Ok(q) => q,
         Err(_) => {
-            let inner = RunnerError::QueryInvalidJsonpathExpression { value };
-            return Err(Error::new(*expr_source_info, inner, false));
+            let kind = RunnerErrorKind::QueryInvalidJsonpathExpression { value: expr_str };
+            return Err(RunnerError::new(expr_source_info, kind, false));
         }
-    };
-    let value = match serde_json::from_str(json) {
-        Err(_) => {
-            return Err(Error::new(
-                source_info,
-                RunnerError::QueryInvalidJson,
-                false,
-            ));
-        }
-        Ok(v) => v,
     };
 
-    let results = jsonpath_query.eval(&value);
+    let results = jsonpath_query.eval(json);
     match results {
         None => Ok(None),
         Some(jsonpath::JsonpathResult::SingleEntry(value)) => Ok(Some(Value::from_json(&value))),
@@ -76,18 +76,16 @@ pub fn eval_jsonpath_string(
 }
 
 #[cfg(test)]
-pub mod tests {
-    use hurl_core::ast::{
-        Filter, FilterValue, Pos, SourceInfo, Template, TemplateElement, Whitespace,
-    };
-    use std::collections::HashMap;
+mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo, Template, TemplateElement, Whitespace};
+    use hurl_core::reader::Pos;
 
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::Value;
+    use crate::runner::{Value, VariableSet};
 
     #[test]
-    pub fn eval_filter_jsonpath() {
-        let variables = HashMap::new();
+    fn eval_filter_jsonpath() {
+        let variables = VariableSet::new();
 
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),

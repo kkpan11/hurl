@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,8 @@
  * limitations under the License.
  *
  */
+pub use self::logger::Logger;
 
-pub use self::fs::read_to_string;
-pub use self::logger::{
-    log_info, make_logger_error_message, make_logger_linter_error, make_logger_parser_error,
-    make_logger_verbose,
-};
-
-mod fs;
+pub mod error;
 mod logger;
 pub mod options;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CliError {
-    pub message: String,
-}

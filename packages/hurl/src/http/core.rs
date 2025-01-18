@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,15 +18,23 @@
 use core::fmt;
 use std::str::FromStr;
 
+/// [Cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie) returned by
+/// the server with `Set-Cookie` header, and saved in the cookie storage of the internal HTTP
+/// engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cookie {
+    /// Defines the host to which the cookie will be sent.
     pub domain: String,
     pub include_subdomain: String,
+    /// Indicates the path that must exist in the requested URL for the browser to send the Cookie header.
     pub path: String,
+    /// Indicates that the cookie is sent to the server only when a request is made with the https: scheme
     pub https: String,
+    /// Indicates the maximum lifetime of the cookie as an HTTP-date timestamp.
     pub expires: String,
     pub name: String,
     pub value: String,
+    /// Forbids JavaScript from accessing the cookie.
     pub http_only: bool,
 }
 
@@ -36,10 +44,21 @@ pub struct RequestCookie {
     pub value: String,
 }
 
+/// A key/value pair used for query params, form params and multipart-form params.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Param {
     pub name: String,
     pub value: String,
+}
+
+impl Param {
+    /// Creates a new param pair.
+    pub fn new(name: &str, value: &str) -> Param {
+        Param {
+            name: name.to_string(),
+            value: value.to_string(),
+        }
+    }
 }
 
 impl fmt::Display for Cookie {
@@ -57,11 +76,11 @@ impl fmt::Display for Cookie {
     /// > From left-to-right, here is what each field represents:
     /// > - domain - The domain that created AND that can read the variable.
     /// > - flag - A TRUE/FALSE value indicating if all machines within a given domain can access
-    /// > the variable. This value is set automatically by the browser, depending on the value you
-    /// > set for domain.
+    /// >   the variable. This value is set automatically by the browser, depending on the value you
+    /// >   set for domain.
     /// > - path - The path within the domain that the variable is valid for.
     /// > - secure - A TRUE/FALSE value indicating if a secure connection with the domain is
-    /// > needed to access the variable.
+    /// >   needed to access the variable.
     /// > - expiration - The UNIX time that the variable will expire on. UNIX time is defined as the
     /// > - number of seconds since Jan 1, 1970 00:00:00 GMT.
     /// > - name - The name of the variable.

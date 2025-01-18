@@ -40,3 +40,10 @@ thead {
 .failure, .failure a {
     color: red;
 }
+
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #19191c;
+        color: #c2c2c2;
+    }
+}

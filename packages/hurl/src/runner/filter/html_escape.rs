@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,39 +15,40 @@
  * limitations under the License.
  *
  */
-
 use hurl_core::ast::SourceInfo;
 
 use crate::html;
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value};
 
+/// Converts the characters `&`, `<` and `>` in `value` to HTML-safe sequence.
 pub fn eval_html_escape(
     value: &Value,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::String(value) => {
             let encoded = html::html_escape(value);
             Ok(Some(Value::String(encoded)))
         }
         v => {
-            let inner = RunnerError::FilterInvalidInput(v._type());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.kind().to_string());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo};
+    use hurl_core::reader::Pos;
+
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::Value;
-    use hurl_core::ast::{Filter, FilterValue, Pos, SourceInfo};
-    use std::collections::HashMap;
+    use crate::runner::{Value, VariableSet};
 
     #[test]
     pub fn eval_filter_html_escape() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
             value: FilterValue::HtmlEscape,

@@ -34,10 +34,11 @@ convert_toml_crates_to_key_value() {
         grep --extended-regexp --invert-match "^\[|path|^$|^#" |
             cut --delimiter ',' --field 1 |
                 sed "s/version//g" |
-                    tr -d '"{=}' |
-                        tr -d "'" |
-                            tr -s ' ' |
-                                sort
+                    sed "s/=/ = /g" |
+                        tr -d '"{=}' |
+                            tr -d "'" |
+                                tr -s ' ' |
+                                    sort
 }
 
 get_crate_latest_version() {
@@ -88,8 +89,8 @@ update_crate_version_in_toml() {
     toml_file="$4"
 
     # update crate version in toml
-    sed -i -- "s/${crate} = { version = \"${actual_version}\"/${crate} = { version = \"${last_version}\"/g" "${toml_file}"
-    sed -i -- "s/${crate} = \"${actual_version}\"/${crate} = \"${last_version}\"/g" "${toml_file}"
+    sed -i -- "s/^${crate}.*=.*{.*version.*=.*\"${actual_version}\"/${crate} = { version = \"${last_version}\"/g" "${toml_file}"
+    sed -i -- "s/^${crate}.*=.*\"${actual_version}\"/${crate} = \"${last_version}\"/g" "${toml_file}"
     if grep --extended-regexp --silent "${crate}.*=.*${last_version}" "${toml_file}"; then
         echo "${color_blue}updated to ${last_version}${color_reset}"
     else
@@ -138,16 +139,16 @@ main() {
         echo -e "\n--------------------------------------------------------"
         echo -e "### Crates updates for *Cargo.lock*\n"
         cargo update --color always -vv 2>&1 |
-            (grep -Ev "crates.io index|Removing|^#" || true) |
+            (grep -Ev "crates.io index|Removing|Unchanged|cargo tree|^#" || true) |
                 tr -s ' ' |
                     sed -r "s/\x1B\[([0-9]{1,3}(;[0-9]{1,2})?)?[mGK]//g" |
                         sed "s/ Updating //g" |
                             sed "s/->//g" > "${updated_lock_file}"
         while read -r crate actual_version last_version ; do
-            formated_actual_version=$(echo "${actual_version}" | (grep --only-matching --extended-regexp "[0-9].*.[0-9].*.[0-9]" || true))
-            formated_last_version=$(echo "${last_version}" | (grep --only-matching --extended-regexp "[0-9].*.[0-9].*.[0-9]" || true))
+            formatted_actual_version=$(echo "${actual_version}" | (grep --only-matching --extended-regexp "[0-9].*.[0-9].*.[0-9]" || true))
+            formatted_last_version=$(echo "${last_version}" | (grep --only-matching --extended-regexp "[0-9].*.[0-9].*.[0-9]" || true))
             crate_url="${crates_api_root_url}/${crate}"
-            echo "- ${crate} ${formated_actual_version} ${color_blue}updated to ${formated_last_version}${color_reset}"
+            echo "- ${crate} ${formatted_actual_version} ${color_blue}updated to ${formatted_last_version}${color_reset}"
             get_crate_github_release_body "${crate_url}" "${last_version}"
 
         done < "${updated_lock_file}"

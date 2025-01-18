@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,49 +15,50 @@
  * limitations under the License.
  *
  */
-
 use hurl_core::ast::SourceInfo;
 
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value};
 
+/// Returns the element from a collection `value` at a zero-based index.
 pub fn eval_nth(
     value: &Value,
     source_info: SourceInfo,
     assert: bool,
     n: u64,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::List(values) => match values.get(n as usize) {
             None => {
-                let inner = RunnerError::FilterInvalidInput(format!(
+                let kind = RunnerErrorKind::FilterInvalidInput(format!(
                     "Out of bound - size is {}",
                     values.len()
                 ));
-                Err(Error::new(source_info, inner, assert))
+                Err(RunnerError::new(source_info, kind, assert))
             }
             Some(value) => Ok(Some(value.clone())),
         },
         v => {
-            let inner = RunnerError::FilterInvalidInput(v.display());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.repr());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo, Whitespace, U64};
+    use hurl_core::reader::Pos;
+
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::{Error, Number, RunnerError, Value};
-    use hurl_core::ast::{Filter, FilterValue, Pos, SourceInfo, Whitespace};
-    use std::collections::HashMap;
+    use crate::runner::{Number, RunnerError, RunnerErrorKind, Value, VariableSet};
 
     #[test]
-    pub fn eval_filter_nth() {
-        let variables = HashMap::new();
+    fn eval_filter_nth() {
+        let variables = VariableSet::new();
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
             value: FilterValue::Nth {
-                n: 2,
+                n: U64::new(2, "2".to_string()),
                 space0: Whitespace {
                     value: String::new(),
                     source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
@@ -93,9 +94,9 @@ pub mod tests {
             )
             .err()
             .unwrap(),
-            Error::new(
+            RunnerError::new(
                 SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
-                RunnerError::FilterInvalidInput("Out of bound - size is 2".to_string()),
+                RunnerErrorKind::FilterInvalidInput("Out of bound - size is 2".to_string()),
                 false
             )
         );

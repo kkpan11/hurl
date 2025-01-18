@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,46 +19,42 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::http::certificate::Certificate;
-use crate::http::{header, Header};
+use crate::http::{HeaderVec, Url};
 
-/// Represents an HTTP response.
+/// Represents a runtime HTTP response.
+/// This is a real response, that has been executed by our HTTP client.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Response {
     pub version: HttpVersion,
     pub status: u32,
-    pub headers: Vec<Header>,
+    pub headers: HeaderVec,
     pub body: Vec<u8>,
     pub duration: Duration,
-    pub url: String,
+    pub url: Url,
     /// The end-user certificate, in the response certificate chain
     pub certificate: Option<Certificate>,
 }
 
-impl Default for Response {
-    fn default() -> Self {
-        Response {
-            version: HttpVersion::Http10,
-            status: 200,
-            headers: vec![],
-            body: vec![],
-            duration: Default::default(),
-            url: String::new(),
-            certificate: None,
-        }
-    }
-}
-
 impl Response {
-    /// Returns all header values.
-    pub fn get_header_values(&self, name: &str) -> Vec<String> {
-        header::get_values(&self.headers, name)
-    }
-
-    /// Returns optional Content-type header value.
-    pub fn content_type(&self) -> Option<String> {
-        header::get_values(&self.headers, "Content-Type")
-            .get(0)
-            .cloned()
+    /// Creates a new HTTP response
+    pub fn new(
+        version: HttpVersion,
+        status: u32,
+        headers: HeaderVec,
+        body: Vec<u8>,
+        duration: Duration,
+        url: Url,
+        certificate: Option<Certificate>,
+    ) -> Self {
+        Response {
+            version,
+            status,
+            headers,
+            body,
+            duration,
+            url,
+            certificate,
+        }
     }
 }
 
@@ -87,17 +83,22 @@ impl fmt::Display for HttpVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::Header;
 
     #[test]
     fn get_header_values() {
+        let mut headers = HeaderVec::new();
+        headers.push(Header::new("Content-Length", "12"));
         let response = Response {
-            headers: vec![Header::new("Content-Length", "12")],
-            ..Default::default()
+            version: HttpVersion::Http10,
+            status: 200,
+            headers,
+            body: vec![],
+            duration: Default::default(),
+            url: "http://localhost".parse().unwrap(),
+            certificate: None,
         };
-        assert_eq!(
-            response.get_header_values("Content-Length"),
-            vec!["12".to_string()]
-        );
-        assert!(response.get_header_values("Unknown").is_empty());
+        assert_eq!(response.headers.values("Content-Length"), vec!["12"]);
+        assert!(response.headers.values("Unknown").is_empty());
     }
 }

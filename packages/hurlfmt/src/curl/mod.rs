@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ impl HurlOption {
         }
     }
 }
+
 impl fmt::Display for HurlOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.name, self.value)
@@ -53,7 +54,7 @@ pub fn parse(s: &str) -> Result<String, String> {
         let hurl_str = parse_line(line).map_err(|message| {
             format!("Can not parse curl command at line {}: {message}", i + 1)
         })?;
-        s.push_str(format!("{hurl_str}\n").as_str())
+        s.push_str(format!("{hurl_str}\n").as_str());
     }
     Ok(s)
 }
@@ -68,7 +69,8 @@ fn parse_line(s: &str) -> Result<String, String> {
         .arg(commands::max_redirects())
         .arg(commands::method())
         .arg(commands::retry())
-        .arg(commands::url());
+        .arg(commands::url())
+        .arg(commands::url_param());
 
     let params = args::split(s)?;
     let arg_matches = match command.try_get_matches_from_mut(params) {

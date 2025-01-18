@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -79,6 +79,13 @@ pub fn retry() -> clap::Arg {
 
 pub fn url() -> clap::Arg {
     clap::Arg::new("url")
+        .long("url")
+        .value_name("url")
+        .num_args(1)
+}
+
+pub fn url_param() -> clap::Arg {
+    clap::Arg::new("url_param")
         .help("Sets the url to use")
         .required(false)
         .num_args(1)

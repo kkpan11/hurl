@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,15 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-use std::time::Duration;
-
-use hurl_core::ast::*;
+use hurl_core::ast::{Entry, SourceInfo};
 
 use crate::http;
-use crate::http::ClientOptions;
-use crate::runner::error::Error;
-use crate::runner::request::{cookie_storage_clear, cookie_storage_set, eval_request};
-use crate::runner::response::{eval_asserts, eval_captures, eval_version_status_asserts};
+use crate::http::{ClientOptions, CurlCmd};
+use crate::runner::cache::BodyCache;
+use crate::runner::error::RunnerError;
 use crate::runner::result::{AssertResult, EntryResult};
 use crate::runner::runner_options::RunnerOptions;
-use crate::runner::value::Value;
+use crate::runner::{request, response, CaptureResult, RunnerErrorKind, VariableSet};
 use crate::util::logger::{Logger, Verbosity};
 
 /// Runs an `entry` with `http_client` and returns one [`EntryResult`].
@@ -40,22 +36,24 @@ pub fn run(
     entry: &Entry,
     entry_index: usize,
     http_client: &mut http::Client,
-    variables: &mut HashMap<String, Value>,
+    variables: &mut VariableSet,
     runner_options: &RunnerOptions,
-    logger: &Logger,
+    logger: &mut Logger,
 ) -> EntryResult {
+    let compressed = runner_options.compressed;
+    let source_info = entry.source_info();
     let context_dir = &runner_options.context_dir;
-    let http_request = match eval_request(&entry.request, variables, context_dir) {
+
+    // Evaluates our source requests given our set of variables
+    let http_request = match request::eval_request(&entry.request, variables, context_dir) {
         Ok(r) => r,
         Err(error) => {
             return EntryResult {
                 entry_index,
-                calls: vec![],
-                captures: vec![],
-                asserts: vec![],
+                source_info,
                 errors: vec![error],
-                time_in_ms: 0,
-                compressed: runner_options.compressed,
+                compressed,
+                ..Default::default()
             };
         }
     };
@@ -63,35 +61,26 @@ pub fn run(
 
     // Experimental features with cookie storage
     use std::str::FromStr;
-    if let Some(s) = cookie_storage_set(&entry.request) {
+    if let Some(s) = request::cookie_storage_set(&entry.request) {
         if let Ok(cookie) = http::Cookie::from_str(s.as_str()) {
-            http_client.add_cookie(&cookie, &client_options);
+            http_client.add_cookie(&cookie, logger);
         } else {
-            logger.warning(format!("Cookie string can not be parsed: '{s}'").as_str());
+            logger.warning(&format!("Cookie string can not be parsed: '{s}'"));
         }
     }
-    if cookie_storage_clear(&entry.request) {
-        http_client.clear_cookie_storage(&client_options);
+    if request::cookie_storage_clear(&entry.request) {
+        http_client.clear_cookie_storage(logger);
     }
 
-    logger.debug("");
-    logger.debug_important("Cookie store:");
-    for cookie in http_client.get_cookie_storage() {
-        logger.debug(cookie.to_string().as_str());
-    }
-    logger.debug("");
-    log_request_spec(&http_request, logger);
-
-    logger.debug("Request can be run with the following curl command:");
-    let output = &runner_options.output;
-    let curl_command = http_client.curl_command_line(
+    let curl_cmd = http_client.curl_command_line(
         &http_request,
         context_dir,
-        output.as_deref(),
+        runner_options.output.as_ref(),
         &client_options,
+        logger,
     );
-    logger.debug(curl_command.as_str());
-    logger.debug("");
+
+    log_request(http_client, &curl_cmd, &http_request, logger);
 
     // Run the HTTP requests (optionally follow redirection)
     let calls = match http_client.execute_with_redirect(&http_request, &client_options, logger) {
@@ -99,112 +88,126 @@ pub fn run(
         Err(http_error) => {
             let start = entry.request.url.source_info.start;
             let end = entry.request.url.source_info.end;
-            let source_info = SourceInfo::new(start, end);
-            let error = Error::new(source_info, http_error.into(), false);
+            let error_source_info = SourceInfo::new(start, end);
+            let error =
+                RunnerError::new(error_source_info, RunnerErrorKind::Http(http_error), false);
             return EntryResult {
                 entry_index,
-                calls: vec![],
-                captures: vec![],
-                asserts: vec![],
+                source_info,
                 errors: vec![error],
-                time_in_ms: 0,
-                compressed: client_options.compressed,
+                compressed,
+                curl_cmd,
+                ..Default::default()
             };
         }
     };
 
-    // We runs capture and asserts on the last HTTP request/response chains.
+    // Now, we can compute capture and asserts on the last HTTP request/response chains.
     let call = calls.last().unwrap();
     let http_response = &call.response;
-    // `time_in_ms` represent the network time of calls, not including assert processing.
-    let time_in_ms = calls
-        .iter()
-        .map(|call| call.timings.total)
-        .sum::<Duration>()
-        .as_millis();
+
+    // `transfer_duration` represent the network time of calls, not including assert processing.
+    let transfer_duration = calls.iter().map(|call| call.timings.total).sum();
 
     // We proceed asserts and captures in this order:
     // 1. first, check implicit assert on status and version. If KO, test is failed
     // 2. then, we compute captures, we might need them in asserts
     // 3. finally, run the remaining asserts
-    let mut all_asserts = vec![];
+    let mut cache = BodyCache::new();
+    let mut asserts = vec![];
 
     if !runner_options.ignore_asserts {
         if let Some(response_spec) = &entry.response {
-            let mut asserts = eval_version_status_asserts(response_spec, http_response);
-            let errors = asserts_to_errors(&asserts);
+            let mut status_asserts =
+                response::eval_version_status_asserts(response_spec, http_response);
+            let errors = asserts_to_errors(&status_asserts);
+            asserts.append(&mut status_asserts);
             if !errors.is_empty() {
                 logger.debug("");
                 return EntryResult {
                     entry_index,
+                    source_info,
                     calls,
                     captures: vec![],
                     asserts,
                     errors,
-                    time_in_ms,
-                    compressed: client_options.compressed,
+                    transfer_duration,
+                    compressed,
+                    curl_cmd,
                 };
             }
-            all_asserts.append(&mut asserts);
         }
     };
 
     let captures = match &entry.response {
         None => vec![],
-        Some(response_spec) => match eval_captures(response_spec, http_response, variables) {
-            Ok(captures) => captures,
-            Err(e) => {
-                return EntryResult {
-                    entry_index,
-                    calls,
-                    captures: vec![],
-                    asserts: all_asserts,
-                    errors: vec![e],
-                    time_in_ms,
-                    compressed: client_options.compressed,
-                };
+        Some(response_spec) => {
+            match response::eval_captures(response_spec, http_response, &mut cache, variables) {
+                Ok(captures) => captures,
+                Err(e) => {
+                    return EntryResult {
+                        entry_index,
+                        source_info,
+                        calls,
+                        captures: vec![],
+                        asserts,
+                        errors: vec![e],
+                        transfer_duration,
+                        compressed,
+                        curl_cmd,
+                    };
+                }
             }
-        },
+        }
     };
 
-    if !captures.is_empty() {
-        logger.debug_important("Captures:");
-        for c in captures.iter() {
-            logger.capture(&c.name, &c.value);
-        }
-    }
+    // Before logging, we update the logger with secrets from the variable set. The variable set
+    // can have been updated
+    logger.secrets = variables.secrets();
+
+    log_captures(&captures, logger);
     logger.debug("");
 
     // Compute asserts
     if !runner_options.ignore_asserts {
         if let Some(response_spec) = &entry.response {
-            let mut asserts = eval_asserts(response_spec, variables, http_response, context_dir);
-            all_asserts.append(&mut asserts);
+            let mut other_asserts = response::eval_asserts(
+                response_spec,
+                variables,
+                http_response,
+                &mut cache,
+                context_dir,
+            );
+            asserts.append(&mut other_asserts);
         }
     };
 
-    let errors = asserts_to_errors(&all_asserts);
+    let errors = asserts_to_errors(&asserts);
 
     EntryResult {
         entry_index,
+        source_info,
         calls,
         captures,
-        asserts: all_asserts,
+        asserts,
         errors,
-        time_in_ms,
-        compressed: client_options.compressed,
+        transfer_duration,
+        compressed,
+        curl_cmd,
     }
 }
 
-/// Converts a list of [`AssertResult`] to a list of [`Error`].
-fn asserts_to_errors(asserts: &[AssertResult]) -> Vec<Error> {
+/// Converts a list of [`AssertResult`] to a list of [`RunnerError`].
+fn asserts_to_errors(asserts: &[AssertResult]) -> Vec<RunnerError> {
     asserts
         .iter()
         .filter_map(|assert| assert.error())
         .map(
-            |Error {
-                 source_info, inner, ..
-             }| Error::new(source_info, inner, true),
+            |RunnerError {
+                 source_info,
+                 kind: inner,
+                 ..
+             }| RunnerError::new(source_info, inner, true),
         )
         .collect()
 }
@@ -221,17 +224,25 @@ impl ClientOptions {
             connects_to: runner_options.connects_to.clone(),
             cookie_input_file: runner_options.cookie_input_file.clone(),
             follow_location: runner_options.follow_location,
+            follow_location_trusted: runner_options.follow_location_trusted,
+            headers: runner_options.headers.clone(),
             http_version: runner_options.http_version,
             ip_resolve: runner_options.ip_resolve,
+            max_filesize: runner_options.max_filesize,
+            max_recv_speed: runner_options.max_recv_speed,
             max_redirect: runner_options.max_redirect,
+            max_send_speed: runner_options.max_send_speed,
+            netrc: runner_options.netrc,
+            netrc_file: runner_options.netrc_file.clone(),
+            netrc_optional: runner_options.netrc_optional,
             path_as_is: runner_options.path_as_is,
             proxy: runner_options.proxy.clone(),
             no_proxy: runner_options.no_proxy.clone(),
             insecure: runner_options.insecure,
             resolves: runner_options.resolves.clone(),
-            retry: runner_options.retry,
             ssl_no_revoke: runner_options.ssl_no_revoke,
             timeout: runner_options.timeout,
+            unix_socket: runner_options.unix_socket.clone(),
             user: runner_options.user.clone(),
             user_agent: runner_options.user_agent.clone(),
             verbosity: match verbosity {
@@ -243,40 +254,62 @@ impl ClientOptions {
     }
 }
 
-/// Logs this HTTP `request` spec.
-fn log_request_spec(request: &http::RequestSpec, logger: &Logger) {
+/// Logs this HTTP `request`.
+fn log_request(
+    http_client: &mut http::Client,
+    curl_cmd: &CurlCmd,
+    request: &http::RequestSpec,
+    logger: &mut Logger,
+) {
+    logger.debug("");
+    logger.debug_important("Cookie store:");
+    for cookie in &http_client.cookie_storage(logger) {
+        logger.debug(&cookie.to_string());
+    }
+
+    logger.debug("");
     logger.debug_important("Request:");
-    logger.debug(format!("{} {}", request.method, request.url).as_str());
+    logger.debug(&format!("{} {}", request.method, request.url.raw()));
     for header in &request.headers {
-        logger.debug(header.to_string().as_str());
+        logger.debug(&header.to_string());
     }
     if !request.querystring.is_empty() {
         logger.debug("[QueryStringParams]");
         for param in &request.querystring {
-            logger.debug(param.to_string().as_str());
+            logger.debug(&param.to_string());
         }
     }
     if !request.form.is_empty() {
         logger.debug("[FormParams]");
         for param in &request.form {
-            logger.debug(param.to_string().as_str());
+            logger.debug(&param.to_string());
         }
     }
     if !request.multipart.is_empty() {
         logger.debug("[MultipartFormData]");
         for param in &request.multipart {
-            logger.debug(param.to_string().as_str());
+            logger.debug(&param.to_string());
         }
     }
     if !request.cookies.is_empty() {
         logger.debug("[Cookies]");
         for cookie in &request.cookies {
-            logger.debug(cookie.to_string().as_str());
+            logger.debug(&cookie.to_string());
         }
     }
-    if let Some(s) = &request.content_type {
-        logger.debug("");
-        logger.debug(format!("Implicit content-type={s}").as_str());
-    }
     logger.debug("");
+    logger.debug("Request can be run with the following curl command:");
+    logger.debug(&curl_cmd.to_string());
+    logger.debug("");
+}
+
+/// Logs the `captures` from the entry HTTP response.
+fn log_captures(captures: &[CaptureResult], logger: &mut Logger) {
+    if captures.is_empty() {
+        return;
+    }
+    logger.debug_important("Captures:");
+    for c in captures.iter() {
+        logger.capture(&c.name, &c.value);
+    }
 }

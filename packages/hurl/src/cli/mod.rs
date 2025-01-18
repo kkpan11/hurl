@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,12 @@
  *
  */
 mod error;
-mod fs;
 mod interactive;
+mod logger;
 pub(crate) mod options;
-pub use self::error::CliError;
-pub use self::fs::read_to_string;
-pub use self::options::OutputType;
+mod summary;
+
+pub(crate) use self::error::CliError;
+pub(crate) use self::logger::BaseLogger;
+pub(crate) use self::options::OutputType;
+pub(crate) use self::summary::summary;

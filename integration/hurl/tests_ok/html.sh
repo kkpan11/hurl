@@ -4,12 +4,12 @@ set -Eeuo pipefail
 # Some tests are failing but we want to continue until the end
 set +euo pipefail
 hurl --test \
-  --report-html build/ \
+  --report-html build/a/b/c/ \
   --glob "tests_ok/test.*.hurl"
 
 hurl --test \
-  --report-html build/ \
-  tests_ok/assert_base64.hurl \
+  --report-html build/a/b/c/ \
+  tests_ok/assert_body.hurl \
   tests_ok/assert_header.hurl \
   tests_ok/assert_json.hurl \
   tests_ok/assert_match.hurl \
@@ -18,11 +18,10 @@ hurl --test \
   tests_ok/assert_xpath.hurl \
   tests_ok/bytes.hurl \
   tests_ok/bytes_empty.hurl \
-  tests_ok/capture_and_assert.hurl \
+  tests_ok/captures.hurl \
   tests_ok/charset.hurl \
   tests_ok/compressed_option.hurl \
   tests_ok/cookie_storage.hurl \
-  tests_ok/delete.hurl \
   tests_ok/deprecated.hurl \
   tests_ok/empty.hurl \
   tests_ok/encoding.hurl \
@@ -51,7 +50,6 @@ hurl --test \
   tests_ok/post_base64.hurl \
   tests_ok/post_bytes.hurl \
   tests_ok/post_file.hurl \
-  tests_ok/post_large.hurl \
   tests_ok/post_multilines.hurl \
   tests_ok/post_xml.hurl \
   tests_ok/predicates_string.hurl \

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@
 use std::fs;
 
 use hurl_core::ast::*;
-use hurl_core::parser::{parse_json, Reader};
+use hurl_core::parser::parse_json;
+use hurl_core::reader::{Pos, Reader};
 use hurlfmt::format::{Token, Tokenizable};
 use proptest::prelude::prop::test_runner::TestRunner;
 use proptest::prelude::*;
@@ -79,12 +80,15 @@ fn value_string() -> BoxedStrategy<JsonValue> {
                     encoded: "Hello\\u0020 ".to_string(),
                     value: "Hello ".to_string(),
                 },
-                TemplateElement::Expression(Expr {
+                TemplateElement::Placeholder(Placeholder {
                     space0: Whitespace {
                         value: String::new(),
                         source_info
                     },
-                    variable,
+                    expr: Expr {
+                        kind: ExprKind::Variable(variable),
+                        source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
+                    },
                     space1: Whitespace {
                         value: String::new(),
                         source_info

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
  */
 
 pub use eval::eval_filters;
-pub use jsonpath::eval_jsonpath_string;
-pub use xpath::eval_xpath_string;
+pub use jsonpath::eval_jsonpath_json;
+pub use xpath::eval_xpath_doc;
 
 mod count;
 mod days_after_now;
@@ -34,6 +34,7 @@ mod regex;
 mod replace;
 mod split;
 mod to_date;
+mod to_float;
 mod to_int;
 mod url_decode;
 mod url_encode;

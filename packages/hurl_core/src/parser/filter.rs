@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,17 +16,18 @@
  *
  */
 use crate::ast::{Filter, FilterValue, SourceInfo, Whitespace};
-use crate::parser::combinators::choice;
+use crate::combinator::{choice, ParseError as ParseErrorTrait};
 use crate::parser::number::natural;
 use crate::parser::primitives::{one_or_more_spaces, try_literal, zero_or_more_spaces};
 use crate::parser::query::regex_value;
 use crate::parser::string::quoted_template;
-use crate::parser::{Error, ParseError, ParseResult, Reader};
+use crate::parser::{ParseError, ParseErrorKind, ParseResult};
+use crate::reader::Reader;
 
 pub fn filters(reader: &mut Reader) -> ParseResult<Vec<(Whitespace, Filter)>> {
     let mut filters = vec![];
     loop {
-        let save = reader.state;
+        let save = reader.cursor();
         let space = zero_or_more_spaces(reader)?;
         if space.value.is_empty() {
             break;
@@ -37,7 +38,7 @@ pub fn filters(reader: &mut Reader) -> ParseResult<Vec<(Whitespace, Filter)>> {
             }
             Err(e) => {
                 if e.recoverable {
-                    reader.state = save;
+                    reader.seek(save);
                     break;
                 } else {
                     return Err(e);
@@ -49,7 +50,7 @@ pub fn filters(reader: &mut Reader) -> ParseResult<Vec<(Whitespace, Filter)>> {
 }
 
 pub fn filter(reader: &mut Reader) -> ParseResult<Filter> {
-    let start = reader.state.pos;
+    let start = reader.cursor();
     let value = choice(
         &[
             count_filter,
@@ -64,6 +65,7 @@ pub fn filter(reader: &mut Reader) -> ParseResult<Filter> {
             regex_filter,
             replace_filter,
             split_filter,
+            to_float_filter,
             to_int_filter,
             to_date_filter,
             url_decode_filter,
@@ -74,19 +76,19 @@ pub fn filter(reader: &mut Reader) -> ParseResult<Filter> {
     )
     .map_err(|e| {
         if e.recoverable {
-            Error {
-                pos: e.pos,
-                recoverable: e.recoverable,
-                inner: ParseError::Expecting {
-                    value: "filter".to_string(),
-                },
-            }
+            let kind = ParseErrorKind::Expecting {
+                value: "filter".to_string(),
+            };
+            ParseError::new(e.pos, true, kind)
         } else {
             e
         }
     })?;
-    let end = reader.state.pos;
-    let source_info = SourceInfo { start, end };
+    let end = reader.cursor();
+    let source_info = SourceInfo {
+        start: start.pos,
+        end: end.pos,
+    };
     Ok(Filter { source_info, value })
 }
 
@@ -132,7 +134,7 @@ fn html_decode_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
 fn jsonpath_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
     try_literal("jsonpath", reader)?;
     let space0 = one_or_more_spaces(reader)?;
-    let expr = quoted_template(reader).map_err(|e| e.non_recoverable())?;
+    let expr = quoted_template(reader).map_err(|e| e.to_non_recoverable())?;
     Ok(FilterValue::JsonPath { space0, expr })
 }
 
@@ -155,7 +157,7 @@ fn replace_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
     let space0 = one_or_more_spaces(reader)?;
     let old_value = regex_value(reader)?;
     let space1 = one_or_more_spaces(reader)?;
-    let new_value = quoted_template(reader).map_err(|e| e.non_recoverable())?;
+    let new_value = quoted_template(reader).map_err(|e| e.to_non_recoverable())?;
     Ok(FilterValue::Replace {
         space0,
         old_value,
@@ -167,7 +169,7 @@ fn replace_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
 fn split_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
     try_literal("split", reader)?;
     let space0 = one_or_more_spaces(reader)?;
-    let sep = quoted_template(reader).map_err(|e| e.non_recoverable())?;
+    let sep = quoted_template(reader).map_err(|e| e.to_non_recoverable())?;
     Ok(FilterValue::Split { space0, sep })
 }
 
@@ -176,6 +178,11 @@ fn to_date_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
     let space0 = one_or_more_spaces(reader)?;
     let fmt = quoted_template(reader)?;
     Ok(FilterValue::ToDate { space0, fmt })
+}
+
+fn to_float_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
+    try_literal("toFloat", reader)?;
+    Ok(FilterValue::ToFloat)
 }
 
 fn to_int_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
@@ -196,15 +203,15 @@ fn url_decode_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
 fn xpath_filter(reader: &mut Reader) -> ParseResult<FilterValue> {
     try_literal("xpath", reader)?;
     let space0 = one_or_more_spaces(reader)?;
-    let expr = quoted_template(reader).map_err(|e| e.non_recoverable())?;
+    let expr = quoted_template(reader).map_err(|e| e.to_non_recoverable())?;
     Ok(FilterValue::XPath { space0, expr })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Pos;
-    use crate::parser::ParseError;
+    use crate::parser::ParseErrorKind;
+    use crate::reader::Pos;
 
     #[test]
     fn test_count() {
@@ -223,8 +230,8 @@ mod tests {
         let mut reader = Reader::new("xcount");
         let err = filter(&mut reader).err().unwrap();
         assert_eq!(
-            err.inner,
-            ParseError::Expecting {
+            err.kind,
+            ParseErrorKind::Expecting {
                 value: "filter".to_string()
             }
         );
@@ -234,8 +241,8 @@ mod tests {
         let mut reader = Reader::new("regex 1");
         let err = filter(&mut reader).err().unwrap();
         assert_eq!(
-            err.inner,
-            ParseError::Expecting {
+            err.kind,
+            ParseErrorKind::Expecting {
                 value: "\" or /".to_string()
             }
         );

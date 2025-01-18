@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,10 +17,9 @@
  */
 
 /**
- * Serde json son can not be easily used for serialization here because of the orphan rule.
+ * Serde-json can not be easily used for serialization here because of the orphan rule.
  * It seems easier just to reimplement it from scratch (around 50 lines of code)
  */
-
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JValue {
@@ -50,7 +49,13 @@ impl JValue {
             JValue::Object(key_values) => {
                 let s = key_values
                     .iter()
-                    .map(|(k, v)| format!("\"{}\":{}", k, v.format()))
+                    .map(|(k, v)| {
+                        format!(
+                            "\"{}\":{}",
+                            k.chars().map(format_char).collect::<String>(),
+                            v.format()
+                        )
+                    })
                     .collect::<Vec<String>>()
                     .join(",");
                 format!("{{{s}}}")
@@ -90,7 +95,7 @@ pub mod tests {
         assert_eq!(format_char('a'), "a");
         assert_eq!(format_char('"'), "\\\""); //    \"
         assert_eq!(format_char('\n'), "\\n");
-        assert_eq!(format_char('\x07'), "\\u0007")
+        assert_eq!(format_char('\x07'), "\\u0007");
     }
 
     #[test]
@@ -117,6 +122,18 @@ pub mod tests {
             ])
             .format(),
             "[1,2,3]"
+        );
+    }
+    #[test]
+    pub fn test_format_special_characters() {
+        let value = JValue::Object(vec![(
+            "sp\"ecial\\key".to_string(),
+            JValue::String("sp\nvalue\twith\x08control".to_string()),
+        )]);
+
+        assert_eq!(
+            value.format(),
+            r#"{"sp\"ecial\\key":"sp\nvalue\twith\bcontrol"}"#
         );
     }
 

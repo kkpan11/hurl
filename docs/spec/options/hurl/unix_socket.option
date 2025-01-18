@@ -1,0 +1,7 @@
+name: unix_socket
+long: unix-socket
+value: PATH
+help: (HTTP) Connect through this Unix domain socket, instead of using the network
+help_heading: HTTP options
+---
+(HTTP) Connect through this Unix domain socket, instead of using the network.

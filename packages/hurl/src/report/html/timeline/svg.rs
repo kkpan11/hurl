@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -93,7 +93,7 @@ impl Element {
 
     /// Adds a `child` to this element.
     pub fn add_child(&mut self, child: Element) {
-        self.children.push(child)
+        self.children.push(child);
     }
 
     /// Returns an iterator over these element's children.
@@ -130,47 +130,47 @@ impl Element {
     }
 
     /// Serializes this element to a SVG string.
-    fn to_svg(&self) -> String {
+    fn to_svg(&self, buffer: &mut String) {
         let name = self.kind().name();
 
-        let mut s = String::from("<");
-        s.push_str(name);
+        buffer.push('<');
+        buffer.push_str(name);
 
         if self.kind() == ElementKind::Svg {
             // Attributes specific to svg
-            push_attr(&mut s, "xmlns", "http://www.w3.org/2000/svg");
+            push_attr(buffer, "xmlns", "http://www.w3.org/2000/svg");
         }
 
         for att in self.attrs() {
-            s.push(' ');
-            s.push_str(&att.to_string());
+            buffer.push(' ');
+            buffer.push_str(&att.to_string());
         }
 
         if self.has_children() || self.has_content() {
-            s.push('>');
+            buffer.push('>');
             for child in self.children() {
-                s.push_str(&child.to_svg());
+                child.to_svg(buffer);
             }
-            s.push_str(self.content());
-            s.push_str("</");
-            s.push_str(name);
-            s.push('>');
+            buffer.push_str(self.content());
+            buffer.push_str("</");
+            buffer.push_str(name);
+            buffer.push('>');
         } else {
-            s.push_str(" />");
+            buffer.push_str(" />");
         }
-        s
     }
 }
 
 impl fmt::Display for Element {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let text = self.to_svg();
+        let mut text = String::new();
+        self.to_svg(&mut text);
         f.write_str(&text)
     }
 }
 
 fn push_attr(f: &mut String, key: &str, value: &str) {
-    f.push_str(&format!(" {key}=\"{value}\""))
+    f.push_str(&format!(" {key}=\"{value}\""));
 }
 
 /// SVG elements can be modified using attributes.

@@ -1,11 +1,10 @@
 # coding=utf-8
-from flask import request
 from app import app
+from flask import request
 
 
 @app.route("/key-template/header")
 def key_template_header():
-    print(request.headers)
     assert request.headers["name"] == "value"
     return ""
 

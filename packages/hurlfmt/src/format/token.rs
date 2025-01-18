@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,18 @@
  * limitations under the License.
  *
  */
-use hurl_core::ast::*;
+use hurl_core::ast::{
+    Assert, Base64, Body, BooleanOption, Bytes, Capture, CertificateAttributeName, Comment, Cookie,
+    CookieAttribute, CookiePath, CountOption, DurationOption, EncodedString, Entry, EntryOption,
+    Expr, ExprKind, File, FileParam, FileValue, Filter, FilterValue, Function, GraphQl,
+    GraphQlVariables, Hex, HurlFile, JsonListElement, JsonObjectElement, JsonValue, KeyValue,
+    LineTerminator, Method, MultilineString, MultilineStringAttribute, MultilineStringKind,
+    MultipartParam, NaturalOption, OptionKind, Placeholder, Predicate, PredicateFunc,
+    PredicateFuncValue, PredicateValue, Query, QueryValue, Regex, RegexValue, Request, Response,
+    Section, SectionValue, Status, StatusValue, Template, TemplateElement, Text, Variable,
+    VariableDefinition, VariableValue, Version, Whitespace, I64, U64,
+};
+use hurl_core::typing::{Count, Duration};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
@@ -41,6 +52,7 @@ pub enum Token {
     CodeDelimiter(String),
     CodeVariable(String),
     Lang(String),
+    Unit(String),
 }
 
 pub trait Tokenizable {
@@ -121,7 +133,7 @@ impl Tokenizable for Response {
         tokens.append(&mut self.headers.iter().flat_map(|e| e.tokenize()).collect());
         tokens.append(&mut self.sections.iter().flat_map(|e| e.tokenize()).collect());
         if let Some(body) = self.clone().body {
-            tokens.append(&mut body.tokenize())
+            tokens.append(&mut body.tokenize());
         }
         tokens
     }
@@ -202,18 +214,18 @@ impl Tokenizable for SectionValue {
             SectionValue::Asserts(items) => {
                 tokens.append(&mut items.iter().flat_map(|e| e.tokenize()).collect());
             }
-            SectionValue::QueryParams(items) => {
+            SectionValue::QueryParams(items, _) => {
                 tokens.append(&mut items.iter().flat_map(|e| e.tokenize()).collect());
             }
             SectionValue::BasicAuth(item) => {
                 if let Some(kv) = item {
-                    tokens.append(&mut kv.tokenize())
+                    tokens.append(&mut kv.tokenize());
                 }
             }
-            SectionValue::FormParams(items) => {
+            SectionValue::FormParams(items, _) => {
                 tokens.append(&mut items.iter().flat_map(|e| e.tokenize()).collect());
             }
-            SectionValue::MultipartFormData(items) => {
+            SectionValue::MultipartFormData(items, _) => {
                 tokens.append(&mut items.iter().flat_map(|e| e.tokenize()).collect());
             }
             SectionValue::Cookies(items) => {
@@ -363,6 +375,10 @@ impl Tokenizable for Capture {
             tokens.append(&mut space.tokenize());
             tokens.append(&mut filter.tokenize());
         }
+        if self.redact {
+            tokens.append(&mut self.space3.tokenize());
+            tokens.push(Token::Keyword(String::from("redact")));
+        }
         tokens.append(&mut self.line_terminator0.tokenize());
         tokens
     }
@@ -495,7 +511,11 @@ impl Tokenizable for CertificateAttributeName {
             CertificateAttributeName::ExpireDate => "Expire-Date",
             CertificateAttributeName::SerialNumber => "Serial-Number",
         };
-        vec![Token::String(value.to_string())]
+        vec![
+            Token::StringDelimiter("\"".to_string()),
+            Token::String(value.to_string()),
+            Token::StringDelimiter("\"".to_string()),
+        ]
     }
 }
 
@@ -520,86 +540,92 @@ impl Tokenizable for PredicateFunc {
 impl Tokenizable for PredicateFuncValue {
     fn tokenize(&self) -> Vec<Token> {
         let mut tokens: Vec<Token> = vec![];
+        let name = self.name().to_string();
         match self {
             PredicateFuncValue::Equal { space0, value, .. } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::NotEqual { space0, value, .. } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::GreaterThan { space0, value, .. } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::GreaterThanOrEqual { space0, value, .. } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::LessThan { space0, value, .. } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::LessThanOrEqual { space0, value, .. } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::StartWith { space0, value } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::EndWith { space0, value } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::Contain { space0, value } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::Include { space0, value } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
             PredicateFuncValue::Match { space0, value } => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
                 tokens.append(&mut space0.tokenize());
                 tokens.append(&mut value.tokenize());
             }
-
             PredicateFuncValue::IsInteger => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
             }
             PredicateFuncValue::IsFloat => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
             }
             PredicateFuncValue::IsBoolean => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
             }
             PredicateFuncValue::IsString => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
             }
             PredicateFuncValue::IsCollection => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
             }
             PredicateFuncValue::IsDate => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
+            }
+            PredicateFuncValue::IsIsoDate => {
+                tokens.push(Token::PredicateType(name));
             }
             PredicateFuncValue::Exist => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
             }
             PredicateFuncValue::IsEmpty => {
-                tokens.push(Token::PredicateType(self.name()));
+                tokens.push(Token::PredicateType(name));
+            }
+            PredicateFuncValue::IsNumber => {
+                tokens.push(Token::PredicateType(name));
             }
         }
         tokens
@@ -614,9 +640,10 @@ impl Tokenizable for PredicateValue {
             PredicateValue::Bool(value) => vec![Token::Boolean(value.to_string())],
             PredicateValue::Null => vec![Token::Keyword("null".to_string())],
             PredicateValue::Number(value) => vec![Token::Number(value.to_string())],
+            PredicateValue::File(value) => value.tokenize(),
             PredicateValue::Hex(value) => vec![Token::String(value.to_string())],
             PredicateValue::Base64(value) => value.tokenize(),
-            PredicateValue::Expression(value) => value.tokenize(),
+            PredicateValue::Placeholder(value) => value.tokenize(),
             PredicateValue::Regex(value) => value.tokenize(),
         }
     }
@@ -625,21 +652,42 @@ impl Tokenizable for PredicateValue {
 impl Tokenizable for MultilineString {
     fn tokenize(&self) -> Vec<Token> {
         let mut tokens: Vec<Token> = vec![Token::StringDelimiter("```".to_string())];
-        // FIXME: ugly if !let workaround, will be removed soon as
-        // OneLineText is temporary.
-        if let MultilineString::OneLineText(..) = self {
-        } else {
-            tokens.push(Token::Lang(self.lang().to_string()));
+        tokens.push(Token::Lang(self.lang().to_string()));
+        for (i, attribute) in self.attributes.iter().enumerate() {
+            if i > 0 || !self.lang().is_empty() {
+                tokens.push(Token::StringDelimiter(",".to_string()));
+            }
+            tokens.append(&mut attribute.tokenize());
         }
         match self {
-            MultilineString::OneLineText(template) => tokens.append(&mut template.tokenize()),
-            MultilineString::Text(text)
-            | MultilineString::Json(text)
-            | MultilineString::Xml(text) => tokens.append(&mut text.tokenize()),
-            MultilineString::GraphQl(graphql) => tokens.append(&mut graphql.tokenize()),
+            MultilineString {
+                kind: MultilineStringKind::Text(text),
+                ..
+            }
+            | MultilineString {
+                kind: MultilineStringKind::Json(text),
+                ..
+            }
+            | MultilineString {
+                kind: MultilineStringKind::Xml(text),
+                ..
+            } => tokens.append(&mut text.tokenize()),
+            MultilineString {
+                kind: MultilineStringKind::GraphQl(graphql),
+                ..
+            } => tokens.append(&mut graphql.tokenize()),
         }
         tokens.push(Token::StringDelimiter("```".to_string()));
         tokens
+    }
+}
+
+impl Tokenizable for MultilineStringAttribute {
+    fn tokenize(&self) -> Vec<Token> {
+        match self {
+            MultilineStringAttribute::Escape => vec![Token::String("escape".to_string())],
+            MultilineStringAttribute::NoVariable => vec![Token::String("novariable".to_string())],
+        }
     }
 }
 
@@ -702,7 +750,7 @@ impl Tokenizable for Template {
         if let Some(d) = self.delimiter {
             tokens.push(Token::StringDelimiter(d.to_string()));
         }
-        for element in self.elements.clone() {
+        for element in &self.elements {
             tokens.append(&mut element.tokenize());
         }
         if let Some(d) = self.delimiter {
@@ -718,7 +766,7 @@ impl Tokenizable for TemplateElement {
             TemplateElement::String { encoded, .. } => {
                 vec![Token::String(encoded.to_string())]
             }
-            TemplateElement::Expression(value) => {
+            TemplateElement::Placeholder(value) => {
                 let mut tokens: Vec<Token> = vec![];
                 tokens.append(&mut value.tokenize());
                 tokens
@@ -727,14 +775,44 @@ impl Tokenizable for TemplateElement {
     }
 }
 
-impl Tokenizable for Expr {
+impl Tokenizable for Placeholder {
     fn tokenize(&self) -> Vec<Token> {
         let mut tokens: Vec<Token> = vec![Token::CodeDelimiter(String::from("{{"))];
         tokens.append(&mut self.space0.tokenize());
-        tokens.push(Token::CodeVariable(self.variable.name.clone()));
+        tokens.append(&mut self.expr.tokenize());
         tokens.append(&mut self.space1.tokenize());
         tokens.push(Token::CodeDelimiter(String::from("}}")));
         tokens
+    }
+}
+
+impl Tokenizable for Expr {
+    fn tokenize(&self) -> Vec<Token> {
+        self.kind.tokenize()
+    }
+}
+
+impl Tokenizable for ExprKind {
+    fn tokenize(&self) -> Vec<Token> {
+        match self {
+            ExprKind::Variable(variable) => variable.tokenize(),
+            ExprKind::Function(function) => function.tokenize(),
+        }
+    }
+}
+
+impl Tokenizable for Variable {
+    fn tokenize(&self) -> Vec<Token> {
+        vec![Token::CodeVariable(self.name.clone())]
+    }
+}
+
+impl Tokenizable for Function {
+    fn tokenize(&self) -> Vec<Token> {
+        match self {
+            Function::NewDate => vec![Token::CodeVariable("newDate".to_string())],
+            Function::NewUuid => vec![Token::CodeVariable("newUuid".to_string())],
+        }
     }
 }
 
@@ -770,13 +848,6 @@ impl Tokenizable for Whitespace {
 impl Tokenizable for Comment {
     fn tokenize(&self) -> Vec<Token> {
         vec![Token::Comment(format!("#{}", self.value.clone()))]
-    }
-}
-
-impl Tokenizable for Filename {
-    fn tokenize(&self) -> Vec<Token> {
-        let s = self.value.replace(' ', "\\ ");
-        vec![Token::String(s)]
     }
 }
 
@@ -820,7 +891,7 @@ impl Tokenizable for JsonValue {
             JsonValue::Null => {
                 tokens.push(Token::Keyword("null".to_string()));
             }
-            JsonValue::Expression(exp) => {
+            JsonValue::Placeholder(exp) => {
                 tokens.append(&mut exp.tokenize());
             }
         }
@@ -851,6 +922,7 @@ impl Tokenizable for JsonObjectElement {
         tokens
     }
 }
+
 impl Tokenizable for EntryOption {
     fn tokenize(&self) -> Vec<Token> {
         let mut tokens: Vec<Token> = vec![];
@@ -881,8 +953,11 @@ impl Tokenizable for OptionKind {
             OptionKind::ClientKey(filename) => filename.tokenize(),
             OptionKind::Compressed(value) => value.tokenize(),
             OptionKind::ConnectTo(value) => value.tokenize(),
+            OptionKind::ConnectTimeout(value) => value.tokenize(),
             OptionKind::Delay(value) => value.tokenize(),
             OptionKind::FollowLocation(value) => value.tokenize(),
+            OptionKind::FollowLocationTrusted(value) => value.tokenize(),
+            OptionKind::Header(value) => value.tokenize(),
             OptionKind::Http10(value) => value.tokenize(),
             OptionKind::Http11(value) => value.tokenize(),
             OptionKind::Http2(value) => value.tokenize(),
@@ -890,14 +965,21 @@ impl Tokenizable for OptionKind {
             OptionKind::Insecure(value) => value.tokenize(),
             OptionKind::IpV4(value) => value.tokenize(),
             OptionKind::IpV6(value) => value.tokenize(),
+            OptionKind::LimitRate(value) => value.tokenize(),
             OptionKind::MaxRedirect(value) => value.tokenize(),
+            OptionKind::NetRc(value) => value.tokenize(),
+            OptionKind::NetRcFile(filename) => filename.tokenize(),
+            OptionKind::NetRcOptional(value) => value.tokenize(),
             OptionKind::Output(filename) => filename.tokenize(),
             OptionKind::PathAsIs(value) => value.tokenize(),
             OptionKind::Proxy(value) => value.tokenize(),
+            OptionKind::Repeat(value) => value.tokenize(),
             OptionKind::Resolve(value) => value.tokenize(),
             OptionKind::Retry(value) => value.tokenize(),
             OptionKind::RetryInterval(value) => value.tokenize(),
             OptionKind::Skip(value) => value.tokenize(),
+            OptionKind::UnixSocket(value) => value.tokenize(),
+            OptionKind::User(value) => value.tokenize(),
             OptionKind::Variable(value) => value.tokenize(),
             OptionKind::Verbose(value) => value.tokenize(),
             OptionKind::VeryVerbose(value) => value.tokenize(),
@@ -909,7 +991,7 @@ impl Tokenizable for BooleanOption {
     fn tokenize(&self) -> Vec<Token> {
         match self {
             BooleanOption::Literal(value) => vec![Token::Boolean(value.to_string())],
-            BooleanOption::Expression(expr) => expr.tokenize(),
+            BooleanOption::Placeholder(expr) => expr.tokenize(),
         }
     }
 }
@@ -917,28 +999,58 @@ impl Tokenizable for BooleanOption {
 impl Tokenizable for NaturalOption {
     fn tokenize(&self) -> Vec<Token> {
         match self {
-            NaturalOption::Literal(value) => vec![Token::Number(value.to_string())],
-            NaturalOption::Expression(expr) => expr.tokenize(),
+            NaturalOption::Literal(value) => value.tokenize(),
+            NaturalOption::Placeholder(expr) => expr.tokenize(),
         }
     }
 }
 
-impl Tokenizable for RetryOption {
+impl Tokenizable for U64 {
+    fn tokenize(&self) -> Vec<Token> {
+        vec![Token::Number(self.to_string())]
+    }
+}
+
+impl Tokenizable for I64 {
+    fn tokenize(&self) -> Vec<Token> {
+        vec![Token::Number(self.to_string())]
+    }
+}
+
+impl Tokenizable for CountOption {
     fn tokenize(&self) -> Vec<Token> {
         match self {
-            RetryOption::Literal(retry) => retry.tokenize(),
-            RetryOption::Expression(expr) => expr.tokenize(),
+            CountOption::Literal(retry) => retry.tokenize(),
+            CountOption::Placeholder(expr) => expr.tokenize(),
         }
     }
 }
 
-impl Tokenizable for Retry {
+impl Tokenizable for Count {
     fn tokenize(&self) -> Vec<Token> {
         match self {
-            Retry::None => vec![Token::Number("0".to_string())],
-            Retry::Finite(n) => vec![Token::Number(n.to_string())],
-            Retry::Infinite => vec![Token::Number("-1".to_string())],
+            Count::Finite(n) => vec![Token::Number(n.to_string())],
+            Count::Infinite => vec![Token::Number("-1".to_string())],
         }
+    }
+}
+
+impl Tokenizable for DurationOption {
+    fn tokenize(&self) -> Vec<Token> {
+        match self {
+            DurationOption::Literal(value) => value.tokenize(),
+            DurationOption::Placeholder(expr) => expr.tokenize(),
+        }
+    }
+}
+
+impl Tokenizable for Duration {
+    fn tokenize(&self) -> Vec<Token> {
+        let mut tokens = vec![Token::Number(self.value.to_string())];
+        if let Some(unit) = self.unit {
+            tokens.push(Token::Unit(unit.to_string()));
+        }
+        tokens
     }
 }
 
@@ -958,8 +1070,7 @@ impl Tokenizable for VariableValue {
         match self {
             VariableValue::Null => vec![Token::Keyword("null".to_string())],
             VariableValue::Bool(v) => vec![Token::Boolean(v.to_string())],
-            VariableValue::Integer(v) => vec![Token::Number(v.to_string())],
-            VariableValue::Float(v) => vec![Token::Number(v.to_string())],
+            VariableValue::Number(v) => vec![Token::Number(v.to_string())],
             VariableValue::String(v) => v.tokenize(),
         }
     }
@@ -1032,6 +1143,7 @@ impl Tokenizable for Filter {
                 tokens.append(&mut fmt.tokenize());
                 tokens
             }
+            FilterValue::ToFloat => vec![Token::FilterType(String::from("toFloat"))],
             FilterValue::ToInt => vec![Token::FilterType(String::from("toInt"))],
             FilterValue::XPath { space0, expr } => {
                 let mut tokens: Vec<Token> = vec![Token::FilterType(String::from("xpath"))];

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,22 +15,21 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
 use hurl_core::ast::{RegexValue, SourceInfo, Template};
 
 use crate::runner::regex::eval_regex_value;
 use crate::runner::template::eval_template;
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value, VariableSet};
 
+/// Replaces all occurrences of `old_value` with `new_value` in `value`.
 pub fn eval_replace(
     value: &Value,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     source_info: SourceInfo,
     assert: bool,
     old_value: &RegexValue,
     new_value: &Template,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::String(v) => {
             let re = eval_regex_value(old_value, variables)?;
@@ -39,25 +38,25 @@ pub fn eval_replace(
             Ok(Some(Value::String(s)))
         }
         v => {
-            let inner = RunnerError::FilterInvalidInput(v.display());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.repr());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use hurl_core::ast::{
+        Filter, FilterValue, RegexValue, SourceInfo, Template, TemplateElement, Whitespace,
+    };
+    use hurl_core::reader::Pos;
 
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::Value;
-    use hurl_core::ast::{
-        Filter, FilterValue, Pos, RegexValue, SourceInfo, Template, TemplateElement, Whitespace,
-    };
-    use std::collections::HashMap;
+    use crate::runner::{Value, VariableSet};
 
     #[test]
-    pub fn eval_filter_replace() {
-        let variables = HashMap::new();
+    fn eval_filter_replace() {
+        let variables = VariableSet::new();
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
             value: FilterValue::Replace {

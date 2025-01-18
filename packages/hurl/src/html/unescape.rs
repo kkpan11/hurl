@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,51 +20,53 @@ use std::collections::HashMap;
 use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
-use crate::html::entities::HTML5_ENTITIES;
+use crate::html::entities::HTML5_ENTITIES_REF;
 
 // Ref https://html.spec.whatwg.org/#decimal-character-reference-start-state
+
+static INVALID_CHAR: [(u32, &str); 34] = [
+    (0x00, "\u{fffd}"), // REPLACEMENT CHARACTER
+    (0x0d, "\r"),       // CARRIAGE RETURN
+    (0x80, "\u{20ac}"), // EURO SIGN
+    (0x81, "\u{81}"),   // <control>
+    (0x82, "\u{201a}"), // SINGLE LOW-9 QUOTATION MARK
+    (0x83, "\u{0192}"), // LATIN SMALL LETTER F WITH HOOK
+    (0x84, "\u{201e}"), // DOUBLE LOW-9 QUOTATION MARK
+    (0x85, "\u{2026}"), // HORIZONTAL ELLIPSIS
+    (0x86, "\u{2020}"), // DAGGER
+    (0x87, "\u{2021}"), // DOUBLE DAGGER
+    (0x88, "\u{02c6}"), // MODIFIER LETTER CIRCUMFLEX ACCENT
+    (0x89, "\u{2030}"), // PER MILLE SIGN
+    (0x8a, "\u{0160}"), // LATIN CAPITAL LETTER S WITH CARON
+    (0x8b, "\u{2039}"), // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+    (0x8c, "\u{0152}"), // LATIN CAPITAL LIGATURE OE
+    (0x8d, "\u{8d}"),   // <control>
+    (0x8e, "\u{017d}"), // LATIN CAPITAL LETTER Z WITH CARON
+    (0x8f, "\u{8f}"),   // <control>
+    (0x90, "\u{90}"),   // <control>
+    (0x91, "\u{2018}"), // LEFT SINGLE QUOTATION MARK
+    (0x92, "\u{2019}"), // RIGHT SINGLE QUOTATION MARK
+    (0x93, "\u{201c}"), // LEFT DOUBLE QUOTATION MARK
+    (0x94, "\u{201d}"), // RIGHT DOUBLE QUOTATION MARK
+    (0x95, "\u{2022}"), // BULLET
+    (0x96, "\u{2013}"), // EN DASH
+    (0x97, "\u{2014}"), // EM DASH
+    (0x98, "\u{02dc}"), // SMALL TILDE
+    (0x99, "\u{2122}"), // TRADE MARK SIGN
+    (0x9a, "\u{0161}"), // LATIN SMALL LETTER S WITH CARON
+    (0x9b, "\u{203a}"), // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+    (0x9c, "\u{0153}"), // LATIN SMALL LIGATURE OE
+    (0x9d, "\u{9d}"),   // <control>
+    (0x9e, "\u{017e}"), // LATIN SMALL LETTER Z WITH CARON
+    (0x9f, "\u{0178}"), // LATIN CAPITAL LETTER Y WITH DIAERESIS
+];
+
 lazy_static! {
-    static ref INVALID_CHAR_REF: HashMap<u32, &'static str> = {
-        let mut m = HashMap::new();
-        m.insert(0x00, "\u{fffd}");  // REPLACEMENT CHARACTER
-        m.insert(0x0d, "\r");        // CARRIAGE RETURN
-        m.insert(0x80, "\u{20ac}");  // EURO SIGN
-        m.insert(0x81, "\u{81}");    // <control>
-        m.insert(0x82, "\u{201a}");  // SINGLE LOW-9 QUOTATION MARK
-        m.insert(0x83, "\u{0192}");  // LATIN SMALL LETTER F WITH HOOK
-        m.insert(0x84, "\u{201e}");  // DOUBLE LOW-9 QUOTATION MARK
-        m.insert(0x85, "\u{2026}");  // HORIZONTAL ELLIPSIS
-        m.insert(0x86, "\u{2020}");  // DAGGER
-        m.insert(0x87, "\u{2021}");  // DOUBLE DAGGER
-        m.insert(0x88, "\u{02c6}");  // MODIFIER LETTER CIRCUMFLEX ACCENT
-        m.insert(0x89, "\u{2030}");  // PER MILLE SIGN
-        m.insert(0x8a, "\u{0160}");  // LATIN CAPITAL LETTER S WITH CARON
-        m.insert(0x8b, "\u{2039}");  // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
-        m.insert(0x8c, "\u{0152}");  // LATIN CAPITAL LIGATURE OE
-        m.insert(0x8d, "\u{8d}");    // <control>
-        m.insert(0x8e, "\u{017d}");  // LATIN CAPITAL LETTER Z WITH CARON
-        m.insert(0x8f, "\u{8f}");    // <control>
-        m.insert(0x90, "\u{90}");    // <control>
-        m.insert(0x91, "\u{2018}");  // LEFT SINGLE QUOTATION MARK
-        m.insert(0x92, "\u{2019}");  // RIGHT SINGLE QUOTATION MARK
-        m.insert(0x93, "\u{201c}");  // LEFT DOUBLE QUOTATION MARK
-        m.insert(0x94, "\u{201d}");  // RIGHT DOUBLE QUOTATION MARK
-        m.insert(0x95, "\u{2022}");  // BULLET
-        m.insert(0x96, "\u{2013}");  // EN DASH
-        m.insert(0x97, "\u{2014}");  // EM DASH
-        m.insert(0x98, "\u{02dc}");  // SMALL TILDE
-        m.insert(0x99, "\u{2122}");  // TRADE MARK SIGN
-        m.insert(0x9a, "\u{0161}");  // LATIN SMALL LETTER S WITH CARON
-        m.insert(0x9b, "\u{203a}");  // SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
-        m.insert(0x9c, "\u{0153}");  // LATIN SMALL LIGATURE OE
-        m.insert(0x9d, "\u{9d}");    // <control>
-        m.insert(0x9e, "\u{017e}");  // LATIN SMALL LETTER Z WITH CARON
-        m.insert(0x9f, "\u{0178}");  // LATIN CAPITAL LETTER Y WITH DIAERESIS
-        m
-    };
+    static ref INVALID_CHAR_REF: HashMap<u32, &'static str> =
+        INVALID_CHAR.iter().copied().collect();
 }
 
-const INVALID_CODEPOINTS: [u32; 126] = [
+static INVALID_CODEPOINTS: [u32; 126] = [
     // 0x0001 to 0x0008
     0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, // 0x000E to 0x001F
     0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
@@ -101,12 +103,12 @@ lazy_static! {
 ///
 /// See MDN decoder tool: <https://mothereff.in/html-entities>
 pub fn html_unescape(text: &str) -> String {
-    return if text.chars().any(|c| c == '&') {
+    if text.chars().any(|c| c == '&') {
         CHAR_REF
             .replace_all(text, |caps: &Captures| {
                 let s = &caps[1];
                 let s0 = s.chars().next().unwrap();
-                return if s0 == '#' {
+                if s0 == '#' {
                     // Numeric charref
                     let s1 = s.chars().nth(1).unwrap();
                     let num = if s1 == 'x' || s1 == 'X' {
@@ -133,23 +135,23 @@ pub fn html_unescape(text: &str) -> String {
                     }
                     char::from_u32(num).unwrap().to_string()
                 } else {
-                    if let Some(entity) = HTML5_ENTITIES.get(s) {
+                    if let Some(entity) = HTML5_ENTITIES_REF.get(s) {
                         return entity.to_string();
                     }
                     // Find the longest matching name (as defined by the standard)
                     for x in (1..s.len()).rev() {
                         let name = &s[..x];
-                        if let Some(entity) = HTML5_ENTITIES.get(name) {
+                        if let Some(entity) = HTML5_ENTITIES_REF.get(name) {
                             return format!("{}{}", entity, &s[x..]);
                         }
                     }
                     format!("&{s}")
-                };
+                }
             })
             .to_string()
     } else {
         text.to_string()
-    };
+    }
 }
 
 #[cfg(test)]
@@ -160,7 +162,7 @@ mod tests {
     #[test]
     fn test_html_unescape() {
         fn check(text: &str, expected: &str) {
-            assert_eq!(html_unescape(text), expected.to_string())
+            assert_eq!(html_unescape(text), expected.to_string());
         }
 
         fn check_num(num: usize, expected: &str) {
@@ -194,7 +196,7 @@ mod tests {
         // Check incomplete entities at the end of the string
         for x in ["&", "&#", "&#x", "&#X", "&#y", "&#xy", "&#Xy"].iter() {
             check(x, x);
-            check(&format!("{x};"), &format!("{x};"))
+            check(&format!("{x};"), &format!("{x};"));
         }
 
         // Check several combinations of numeric character references,
@@ -436,7 +438,7 @@ mod tests {
 
         // Check invalid numbers
         for (num, ch) in [(0x0d, "\r"), (0x80, "\u{20ac}"), (0x95, "\u{2022}")] {
-            check_num(num, ch)
+            check_num(num, ch);
         }
 
         // Check small numbers
@@ -448,26 +450,26 @@ mod tests {
 
         // Check that multiple trailing semicolons are handled correctly
         for e in ["&quot;;", "&#34;;", "&#x22;;", "&#X22;;"] {
-            check(e, "\";")
+            check(e, "\";");
         }
 
         // Check that semicolons in the middle don't create problems
         for e in ["&quot;quot;", "&#34;quot;", "&#x22;quot;", "&#X22;quot;"] {
-            check(e, "\"quot;")
+            check(e, "\"quot;");
         }
 
         // Check triple adjacent charrefs
         for e in ["&quot", "&#34", "&#x22", "&#X22"] {
             // check(&e.repeat(3), "\"\"\"");
-            check(&format!("{e};").repeat(3), "\"\"\"")
+            check(&format!("{e};").repeat(3), "\"\"\"");
         }
 
         // Check that the case is respected
         for e in ["&amp", "&amp;", "&AMP", "&AMP;"] {
-            check(e, "&")
+            check(e, "&");
         }
         for e in ["&Amp", "&Amp;"] {
-            check(e, e)
+            check(e, e);
         }
 
         // Check that nonexistent named entities are returned unchanged
@@ -499,6 +501,6 @@ mod tests {
             "&Eacuteric&Eacute;ric&alphacentauri&alpha;centauri",
             "ÉricÉric&alphacentauriαcentauri",
         );
-        check("&co;", "&co;")
+        check("&co;", "&co;");
     }
 }

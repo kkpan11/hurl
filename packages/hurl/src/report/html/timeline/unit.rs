@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -182,13 +182,13 @@ impl Mul<usize> for Pixel {
 
 impl AddAssign for Pixel {
     fn add_assign(&mut self, rhs: Pixel) {
-        *self = *self + rhs
+        *self = *self + rhs;
     }
 }
 
 impl SubAssign for Pixel {
     fn sub_assign(&mut self, rhs: Pixel) {
-        *self = *self - rhs
+        *self = *self - rhs;
     }
 }
 

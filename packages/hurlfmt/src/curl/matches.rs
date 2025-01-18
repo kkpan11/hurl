@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,7 +46,11 @@ pub fn method(arg_matches: &ArgMatches) -> String {
 }
 
 pub fn url(arg_matches: &ArgMatches) -> String {
-    let s = get_string(arg_matches, "url").unwrap();
+    let s = if let Some(value) = get_string(arg_matches, "url") {
+        value
+    } else {
+        get_string(arg_matches, "url_param").unwrap()
+    };
     if !s.starts_with("http") {
         format!("https://{s}")
     } else {
@@ -55,14 +59,11 @@ pub fn url(arg_matches: &ArgMatches) -> String {
 }
 
 pub fn headers(arg_matches: &ArgMatches) -> Vec<String> {
-    let mut headers = match get_strings(arg_matches, "headers") {
-        None => vec![],
-        Some(v) => v,
-    };
+    let mut headers = get_strings(arg_matches, "headers").unwrap_or_default();
     if !has_content_type(&headers) {
         if let Some(data) = get_string(arg_matches, "data") {
             if !data.starts_with('@') {
-                headers.push("Content-Type: application/x-www-form-urlencoded".to_string())
+                headers.push("Content-Type: application/x-www-form-urlencoded".to_string());
             }
         }
     }

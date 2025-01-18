@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,19 @@
  * limitations under the License.
  *
  */
-
 use hurl_core::ast::SourceInfo;
 use percent_encoding::AsciiSet;
 
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value};
 
-// does not encode "/"
-// like Jinja template (https://jinja.palletsprojects.com/en/3.1.x/templates/#jinja-filters.urlencode)
+/// Percent-encodes all the characters in `value` which are not included in unreserved chars
+/// (see [RFC3986](https://www.rfc-editor.org/rfc/rfc3986)) with the exception of forward slash (/).
+/// Does not encode forward slash (/) like Jinja template (<https://jinja.palletsprojects.com/en/3.1.x/templates/#jinja-filters.urlencode>)
 pub fn eval_url_encode(
     value: &Value,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::String(value) => {
             const FRAGMENT: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC
@@ -40,23 +40,23 @@ pub fn eval_url_encode(
             Ok(Some(Value::String(encoded)))
         }
         v => {
-            let inner = RunnerError::FilterInvalidInput(v._type());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.kind().to_string());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo};
+    use hurl_core::reader::Pos;
 
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::Value;
-    use hurl_core::ast::{Filter, FilterValue, Pos, SourceInfo};
-    use std::collections::HashMap;
+    use crate::runner::{Value, VariableSet};
 
     #[test]
-    pub fn eval_filter_url_encode() {
-        let variables = HashMap::new();
+    fn eval_filter_url_encode() {
+        let variables = VariableSet::new();
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             value: FilterValue::UrlEncode,

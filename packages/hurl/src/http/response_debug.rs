@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,24 +15,19 @@
  * limitations under the License.
  *
  */
-
-use colored::Colorize;
+use hurl_core::text::{Format, Style, StyledString};
 
 use crate::http::{debug, mimetype, Response};
 use crate::util::logger::Logger;
 
 impl Response {
     /// Log a response body as text if possible, or a slice of body bytes.
-    pub fn log_body(&self, debug: bool, logger: &Logger) {
-        if debug {
-            logger.debug_important("Response body:");
-        }
-
-        // We try to decode the HTTP body as text if the request has a text kind content type.
+    pub fn log_body(&self, debug: bool, logger: &mut Logger) {
+        // We try to decode the HTTP body as text if the response has a text kind content type.
         // If it ok, we print each line of the body in debug format. Otherwise, we
         // print the body first 64 bytes.
-        if let Some(content_type) = self.content_type() {
-            if !mimetype::is_kind_of_text(&content_type) {
+        if let Some(content_type) = self.headers.content_type() {
+            if !mimetype::is_kind_of_text(content_type) {
                 debug::log_bytes(&self.body, 64, debug, logger);
                 return;
             }
@@ -43,7 +38,7 @@ impl Response {
         }
     }
 
-    pub fn log_all(&self, logger: &Logger) {
+    pub fn log_info_all(&self, logger: &mut Logger) {
         let status_line = self.get_status_line_headers(logger.color);
         logger.info(&status_line);
         self.log_body(false, logger);
@@ -52,22 +47,19 @@ impl Response {
 
     /// Returns status, version and HTTP headers from this HTTP response.
     pub fn get_status_line_headers(&self, color: bool) -> String {
-        let mut str = String::new();
-        let status_line = format!("{} {}\n", self.version, self.status);
-        let status_line = if color {
-            format!("{}", status_line.green().bold())
-        } else {
-            status_line
-        };
-        str.push_str(&status_line);
-        for header in self.headers.iter() {
-            let header_line = if color {
-                format!("{}: {}\n", header.name.cyan().bold(), header.value)
-            } else {
-                format!("{}: {}\n", header.name, header.value)
-            };
-            str.push_str(&header_line);
+        let mut s = StyledString::new();
+        s.push_with(
+            &format!("{} {}\n", self.version, self.status),
+            Style::new().green().bold(),
+        );
+        for header in &self.headers {
+            s.push_with(&header.name, Style::new().cyan().bold());
+            s.push(&format!(": {}\n", header.value));
         }
-        str
+        if color {
+            s.to_string(Format::Ansi)
+        } else {
+            s.to_string(Format::Plain)
+        }
     }
 }

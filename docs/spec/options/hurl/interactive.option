@@ -1,7 +1,9 @@
 name: interactive
 long: interactive
 help: Turn on interactive mode
+help_heading: Run options
 conflict: to_entry
+cli_only: true
 ---
 Stop between requests.
 

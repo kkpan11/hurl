@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,17 +15,18 @@
  * limitations under the License.
  *
  */
-use hurl_core::ast::HurlFile;
+use hurl_core::ast::{HurlFile, SourceInfo};
+use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
 use crate::report::html::nav::Tab;
 use crate::report::html::Testcase;
-use crate::runner::Error as RunnerError;
+use crate::runner::RunnerError;
 
 impl Testcase {
     /// Returns the HTML string of the Hurl source file (syntax colored and errors).
-    pub fn get_source_html(&self, hurl_file: &HurlFile, content: &str) -> String {
-        let nav = self.get_nav_html(content, Tab::Source);
+    pub fn get_source_html(&self, hurl_file: &HurlFile, content: &str, secrets: &[&str]) -> String {
+        let nav = self.get_nav_html(content, Tab::Source, secrets);
         let nav_css = include_str!("resources/nav.css");
         let source_div = hurl_core::format::format_html(hurl_file, false);
         let source_div = underline_errors(&source_div, &self.errors);
@@ -59,34 +60,39 @@ fn get_numbered_lines(content: &str) -> String {
     lines
 }
 
+lazy_static! {
+    static ref LINES_RE: Regex = Regex::new("<span class=\"line\">").unwrap();
+}
+
 /// Adds error class to `content` lines that triggers `errors`.
-fn underline_errors(content: &str, errors: &[RunnerError]) -> String {
+fn underline_errors(content: &str, errors: &[(RunnerError, SourceInfo)]) -> String {
     // In nutshell, we're replacing line `<span class="line">...</span>`
     // with `<span class="line line-error">...</span>`.
-    let re = Regex::new("<span class=\"line\">").unwrap();
     let mut line = 0;
     let error_lines = errors
         .iter()
-        .map(|e| e.source_info.start.line - 1)
+        .map(|(error, _)| error.source_info.start.line - 1)
         .collect::<Vec<_>>();
-    re.replace_all(content, |_: &Captures| {
-        let str = if error_lines.contains(&line) {
-            "<span class=\"line line-error\">"
-        } else {
-            "<span class=\"line\">"
-        };
-        line += 1;
-        str
-    })
-    .to_string()
+    LINES_RE
+        .replace_all(content, |_: &Captures| {
+            let str = if error_lines.contains(&line) {
+                "<span class=\"line line-error\">"
+            } else {
+                "<span class=\"line\">"
+            };
+            line += 1;
+            str
+        })
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use hurl_core::ast::{Pos, SourceInfo};
+    use hurl_core::ast::SourceInfo;
+    use hurl_core::reader::Pos;
 
     use super::*;
-    use crate::runner::RunnerError::QueryHeaderNotFound;
+    use crate::runner::RunnerErrorKind::QueryHeaderNotFound;
 
     #[test]
     fn add_underlined_errors() {
@@ -136,12 +142,13 @@ mod tests {
             </code>
         </pre>"#;
 
-        let errors = vec![RunnerError {
+        let error = RunnerError {
             source_info: SourceInfo::new(Pos::new(2, 1), Pos::new(2, 4)),
-            inner: QueryHeaderNotFound,
+            kind: QueryHeaderNotFound,
             assert: true,
-        }];
-
+        };
+        let entry_src_info = SourceInfo::new(Pos::new(1, 1), Pos::new(1, 18));
+        let errors = [(error, entry_src_info)];
         assert_eq!(underlined_content, underline_errors(content, &errors));
     }
 }

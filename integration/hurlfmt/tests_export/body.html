@@ -1,0 +1,44 @@
+<pre><code class="language-hurl"><span class="hurl-entry"><span class="request"><span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/json</span></span>
+<span class="json"><span class="line">{</span>
+<span class="line">  "message": "Hello",</span>
+<span class="line">  "count": 5,</span>
+<span class="line">  "success": false,</span>
+<span class="line">  "errors": [{"id":"error1"},{"id":"error2"}],</span>
+<span class="line">  "failures": [{"id":"failure1"}],</span>
+<span class="line">  "warnings": [],</span>
+<span class="line">  "duration": 1.5,</span>
+<span class="line">  "tags": ["test"],</span>
+<span class="line">  "nullable": null,</span>
+<span class="line">  "profile-id": "123abc",</span>
+<span class="line">  "empty": {},</span>
+<span class="line">  "name": {{name}}</span>
+<span class="line">}</span></span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/xml</span></span>
+<span class="xml"><span class="line">&lt;message&gt;Hello&lt;/message&gt;</span></span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/multiline-string</span></span>
+<span class="multiline"><span class="line">```</span>
+<span class="line">Hello</span>
+<span class="line">```</span></span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/multiline-string</span></span>
+<span class="multiline"><span class="line">```escape</span>
+<span class="line">Hello\tWorld!</span>
+<span class="line">```</span></span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/oneline-string</span></span>
+<span class="line"><span class="string">`Hello`</span></span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/oneline-base64</span></span>
+<span class="line">base64,<span class="base64">bGluZTEKbGluZTINCmxpbmUzCg==</span>;</span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/oneline-base64</span></span>
+<span class="line">base64,<span class="base64">ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/==</span>;</span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/oneline-file</span></span>
+<span class="line">file,<span class="filename">data.bin</span>;</span>
+</span></span><span class="hurl-entry"><span class="request"><span class="line"></span>
+<span class="line"><span class="method">POST</span> <span class="url">http://localhost:8000/oneline-hex</span></span>
+<span class="line">hex,<span class="hex">010203</span>;</span>
+</span></span></code></pre>

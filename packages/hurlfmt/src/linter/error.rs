@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,32 +16,48 @@
  *
  */
 use hurl_core::ast::SourceInfo;
-use hurl_core::error::Error;
+use hurl_core::error;
+use hurl_core::error::DisplaySourceError;
+use hurl_core::text::{Style, StyledString};
 
-use crate::linter;
-use crate::linter::LinterError;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinterError {
+    pub source_info: SourceInfo,
+    pub kind: LinterErrorKind,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LinterErrorKind {
+    UnnecessarySpace,
+    UnnecessaryJsonEncoding,
+    OneSpace,
+}
 
 ///
 /// Textual Output for linter errors
 ///
-impl Error for linter::Error {
+impl DisplaySourceError for LinterError {
     fn source_info(&self) -> SourceInfo {
         self.source_info
     }
 
     fn description(&self) -> String {
-        match self.inner {
-            LinterError::UnnecessarySpace => "Unnecessary space".to_string(),
-            LinterError::UnnecessaryJsonEncoding => "Unnecessary json encoding".to_string(),
-            LinterError::OneSpace => "One space ".to_string(),
+        match self.kind {
+            LinterErrorKind::UnnecessarySpace => "Unnecessary space".to_string(),
+            LinterErrorKind::UnnecessaryJsonEncoding => "Unnecessary json encoding".to_string(),
+            LinterErrorKind::OneSpace => "One space".to_string(),
         }
     }
 
-    fn fixme(&self) -> String {
-        match self.inner {
-            LinterError::UnnecessarySpace => "Remove space".to_string(),
-            LinterError::UnnecessaryJsonEncoding => "Use Simple String".to_string(),
-            LinterError::OneSpace => "Use only one space".to_string(),
-        }
+    fn fixme(&self, content: &[&str]) -> StyledString {
+        let message = match self.kind {
+            LinterErrorKind::UnnecessarySpace => "Remove space".to_string(),
+            LinterErrorKind::UnnecessaryJsonEncoding => "Use Simple String".to_string(),
+            LinterErrorKind::OneSpace => "Use only one space".to_string(),
+        };
+        let mut s = StyledString::new();
+        let message = error::add_carets(&message, self.source_info(), content);
+        s.push_with(&message, Style::new().cyan());
+        s
     }
 }

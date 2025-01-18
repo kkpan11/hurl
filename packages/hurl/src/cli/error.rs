@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,54 +15,47 @@
  * limitations under the License.
  *
  */
-use std::error::Error;
-use std::fmt;
+use std::{fmt, io};
 
-use hurl::{output, report};
+use hurl::parallel::error::JobError;
+use hurl::report;
 
+#[allow(unused)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CliError {
-    pub message: String,
+pub enum CliError {
+    IO(String),
+    Parsing,
+    Runtime(String),
 }
 
-impl From<Box<dyn Error>> for CliError {
-    fn from(e: Box<dyn Error>) -> Self {
-        Self {
-            message: format!("{e:?}"),
-        }
+impl From<report::ReportError> for CliError {
+    fn from(error: report::ReportError) -> Self {
+        CliError::IO(error.to_string())
     }
 }
 
-impl From<&str> for CliError {
-    fn from(e: &str) -> Self {
-        Self {
-            message: e.to_string(),
-        }
-    }
-}
-
-impl From<String> for CliError {
-    fn from(e: String) -> Self {
-        Self { message: e }
-    }
-}
-
-impl From<report::Error> for CliError {
-    fn from(e: report::Error) -> Self {
-        Self { message: e.message }
-    }
-}
-
-impl From<output::Error> for CliError {
-    fn from(e: output::Error) -> Self {
-        Self {
-            message: e.to_string(),
+impl From<JobError> for CliError {
+    fn from(error: JobError) -> Self {
+        match error {
+            JobError::IO(message) => CliError::IO(message),
+            JobError::Parsing => CliError::Parsing,
+            JobError::Runtime(message) => CliError::Runtime(message),
         }
     }
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.message)
+        match self {
+            CliError::IO(message) => write!(f, "{}", message),
+            CliError::Parsing => Ok(()),
+            CliError::Runtime(message) => write!(f, "{}", message),
+        }
+    }
+}
+
+impl From<io::Error> for CliError {
+    fn from(error: io::Error) -> Self {
+        CliError::IO(error.to_string())
     }
 }

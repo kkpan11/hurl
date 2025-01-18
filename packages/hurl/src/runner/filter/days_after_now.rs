@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,43 +15,43 @@
  * limitations under the License.
  *
  */
-
 use chrono::Utc;
-
 use hurl_core::ast::SourceInfo;
 
-use crate::runner::{Error, Number, RunnerError, Value};
+use crate::runner::{Number, RunnerError, RunnerErrorKind, Value};
 
+/// Returns the number of days between now and a date `value` in the future.
 pub fn eval_days_after_now(
     value: &Value,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::Date(value) => {
             let diff = value.signed_duration_since(Utc::now());
             Ok(Some(Value::Number(Number::Integer(diff.num_days()))))
         }
         v => {
-            let inner = RunnerError::FilterInvalidInput(v._type());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.kind().to_string());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
-    use crate::runner::filter::eval::eval_filter;
+mod tests {
     use chrono::offset::Utc;
     use chrono::Duration;
-    use hurl_core::ast::{Filter, FilterValue, Pos, SourceInfo};
-    use std::collections::HashMap;
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo};
+    use hurl_core::reader::Pos;
 
     use super::*;
+    use crate::runner::filter::eval::eval_filter;
+    use crate::runner::VariableSet;
 
     #[test]
-    pub fn eval_filter_days_after_before_now() {
-        let variables = HashMap::new();
+    fn eval_filter_days_after_before_now() {
+        let variables = VariableSet::new();
 
         let now = Utc::now();
         assert_eq!(
@@ -69,7 +69,7 @@ pub mod tests {
             Value::Number(Number::Integer(0))
         );
 
-        let now_plus_30hours = now + Duration::hours(30);
+        let now_plus_30hours = now + Duration::try_hours(30).unwrap();
         assert_eq!(
             eval_filter(
                 &Filter {

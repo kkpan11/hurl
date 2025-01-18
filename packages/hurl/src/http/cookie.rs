@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,17 +15,11 @@
  * limitations under the License.
  *
  */
+//! This module defines an HTTP ResponseCookie,
+//! namely the cookie returned from the response Set-Cookie header
 
-///
-/// This module defines a HTTP ResponseCookie,
-/// namely the cookie returned from the response Set-Cookie header
-///
-///
-
-///
-/// Cookie return from HTTP Response
+/// Cookie returned from HTTP Response
 /// It contains arbitrary attributes.
-///
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResponseCookie {
     pub name: String,
@@ -39,11 +33,26 @@ pub struct CookieAttribute {
     pub value: Option<String>,
 }
 
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#expiresdate>
+const EXPIRES: &str = "Expires";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#domaindomain-value>
+const DOMAIN: &str = "Domain";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#httponly>
+const HTTP_ONLY: &str = "HttpOnly";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#max-agenumber>
+const MAX_AGE: &str = "Max-Age";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#pathpath-value>
+const PATH: &str = "Path";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#samesitesamesite-value>
+const SAME_SITE: &str = "SameSite";
+/// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie#secure>
+const SECURE: &str = "Secure";
+
 impl ResponseCookie {
     /// Parses value from Set-Cookie header into a `ResponseCookie`.
     ///
     /// See <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie>
-    pub fn parse(s: String) -> Option<ResponseCookie> {
+    pub fn parse(s: &str) -> Option<ResponseCookie> {
         if let Some(index) = s.find('=') {
             let (name, remaining) = s.split_at(index);
             let mut tokens: Vec<&str> = remaining[1..].split(';').collect();
@@ -65,75 +74,70 @@ impl ResponseCookie {
 
     /// Returns the optional Expires attribute as `String` type.
     pub fn expires(&self) -> Option<String> {
-        for attr in self.attributes.clone() {
-            if attr.name.as_str() == "Expires" {
-                return attr.value;
-            }
-        }
-        None
+        self.attr_as_str(EXPIRES)
     }
 
     /// Returns the optional Max-Age attribute as `i64` type.
     ///
     /// If the value is not a valid integer, the attribute is simply ignored
     pub fn max_age(&self) -> Option<i64> {
-        for attr in self.attributes.clone() {
-            if attr.name.as_str() == "Max-Age" {
-                if let Some(v) = attr.value {
-                    if let Ok(v2) = v.as_str().parse::<i64>() {
-                        return Some(v2);
-                    }
-                }
-            }
-        }
-        None
+        self.attr_as_i64(MAX_AGE)
     }
 
     /// Returns the optional Domain attribute as `String` type.
     pub fn domain(&self) -> Option<String> {
-        for attr in self.attributes.clone() {
-            if attr.name.as_str() == "Domain" {
-                return attr.value;
-            }
-        }
-        None
+        self.attr_as_str(DOMAIN)
     }
 
     /// Returns the optional Path attribute as `String` type.
     pub fn path(&self) -> Option<String> {
-        for attr in self.attributes.clone() {
-            if attr.name.as_str() == "Path" {
-                return attr.value;
+        self.attr_as_str(PATH)
+    }
+
+    /// Return true if the Secure attribute is present.
+    pub fn has_secure(&self) -> bool {
+        self.attr_as_bool(SECURE)
+    }
+
+    /// Return true if the HttpOnly attribute is present.
+    pub fn has_httponly(&self) -> bool {
+        self.attr_as_bool(HTTP_ONLY)
+    }
+
+    /// Returns the optional SameSite attribute as `String` type.
+    pub fn samesite(&self) -> Option<String> {
+        self.attr_as_str(SAME_SITE)
+    }
+
+    /// Converts a cookie attribute value named `name` into a string.
+    fn attr_as_str(&self, name: &str) -> Option<String> {
+        for attr in &self.attributes {
+            if attr.name.to_lowercase() == name.to_lowercase() {
+                return attr.value.clone();
             }
         }
         None
     }
 
-    /// Return true if the Secure attribute is present.
-    pub fn has_secure(&self) -> bool {
-        for attr in self.attributes.clone() {
-            if attr.name.as_str() == "Secure" && attr.value.is_none() {
+    /// Converts a cookie attribute value named `name` into a boolean.
+    fn attr_as_bool(&self, name: &str) -> bool {
+        for attr in &self.attributes {
+            if attr.name.to_lowercase() == name.to_lowercase() && attr.value.is_none() {
                 return true;
             }
         }
         false
     }
 
-    /// Return true if the HttpOnly attribute is present.
-    pub fn has_httponly(&self) -> bool {
-        for attr in self.attributes.clone() {
-            if attr.name.as_str() == "HttpOnly" && attr.value.is_none() {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Returns the optional SameSite attribute as `String` type.
-    pub fn samesite(&self) -> Option<String> {
-        for attr in self.attributes.clone() {
-            if attr.name.as_str() == "SameSite" {
-                return attr.value;
+    /// Converts a cookie attribute value named `name` into an integer.
+    fn attr_as_i64(&self, name: &str) -> Option<i64> {
+        for attr in &self.attributes {
+            if attr.name.to_lowercase() == name.to_lowercase() {
+                if let Some(v) = &attr.value {
+                    if let Ok(v2) = v.as_str().parse::<i64>() {
+                        return Some(v2);
+                    }
+                }
             }
         }
         None
@@ -175,6 +179,13 @@ pub mod tests {
                 value: None
             }
         );
+        assert_eq!(
+            CookieAttribute::parse("httponly".to_string()).unwrap(),
+            CookieAttribute {
+                name: "httponly".to_string(),
+                value: None
+            }
+        );
 
         assert_eq!(CookieAttribute::parse(String::new()), None);
     }
@@ -187,7 +198,7 @@ pub mod tests {
             attributes: vec![],
         };
         assert_eq!(
-            ResponseCookie::parse("sessionId=38afes7a8".to_string()).unwrap(),
+            ResponseCookie::parse("sessionId=38afes7a8").unwrap(),
             cookie
         );
         assert_eq!(cookie.expires(), None);
@@ -210,8 +221,7 @@ pub mod tests {
             }],
         };
         assert_eq!(
-            ResponseCookie::parse("id=a3fWa; Expires=Wed, 21 Oct 2015 07:28:00 GMT".to_string())
-                .unwrap(),
+            ResponseCookie::parse("id=a3fWa; Expires=Wed, 21 Oct 2015 07:28:00 GMT").unwrap(),
             cookie
         );
         assert_eq!(
@@ -237,7 +247,7 @@ pub mod tests {
             }],
         };
         assert_eq!(
-            ResponseCookie::parse("id=a3fWa; Max-Age=2592000".to_string()).unwrap(),
+            ResponseCookie::parse("id=a3fWa; Max-Age=2592000").unwrap(),
             cookie
         );
         assert_eq!(cookie.expires(), None);
@@ -274,7 +284,7 @@ pub mod tests {
             ],
         };
         assert_eq!(
-            ResponseCookie::parse("LSID=DQAAAK…Eaem_vYg; Path=/accounts; Expires=Wed, 13 Jan 2021 22:23:01 GMT; Secure; HttpOnly".to_string()).unwrap(),
+            ResponseCookie::parse("LSID=DQAAAK…Eaem_vYg; Path=/accounts; Expires=Wed, 13 Jan 2021 22:23:01 GMT; Secure; HttpOnly").unwrap(),
             cookie
         );
         assert_eq!(
@@ -314,7 +324,7 @@ pub mod tests {
             ],
         };
         assert_eq!(
-            ResponseCookie::parse("HSID=AYQEVn…DKrdst; Domain=.foo.com; Path=/; Expires=Wed, 13 Jan 2021 22:23:01 GMT; HttpOnly".to_string()).unwrap(),
+            ResponseCookie::parse("HSID=AYQEVn…DKrdst; Domain=.foo.com; Path=/; Expires=Wed, 13 Jan 2021 22:23:01 GMT; HttpOnly").unwrap(),
             cookie
         );
         assert_eq!(
@@ -332,7 +342,7 @@ pub mod tests {
     #[test]
     fn test_trailing_semicolon() {
         assert_eq!(
-            ResponseCookie::parse("xx=yy;".to_string()).unwrap(),
+            ResponseCookie::parse("xx=yy;").unwrap(),
             ResponseCookie {
                 name: "xx".to_string(),
                 value: "yy".to_string(),
@@ -343,7 +353,7 @@ pub mod tests {
 
     #[test]
     fn test_invalid_cookie() {
-        assert_eq!(ResponseCookie::parse("xx".to_string()), None);
+        assert_eq!(ResponseCookie::parse("xx"), None);
     }
 
     #[test]
@@ -363,7 +373,7 @@ pub mod tests {
             ],
         };
         assert_eq!(
-            ResponseCookie::parse("id=a3fWa; Secure=0; Max-Age=".to_string()).unwrap(),
+            ResponseCookie::parse("id=a3fWa; Secure=0; Max-Age=").unwrap(),
             cookie
         );
         assert_eq!(cookie.expires(), None);

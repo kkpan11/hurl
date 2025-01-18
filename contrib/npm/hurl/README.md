@@ -11,7 +11,6 @@ versatile, it can be used for <b>fetching data</b> and <b>testing HTTP</b> sessi
 ```hurl
 # Get home:
 GET https://example.net
-
 HTTP 200
 [Captures]
 csrf_token: xpath "string(//meta[@name='_csrf_token']/@content)"
@@ -35,7 +34,6 @@ POST https://example.org/api/tests
     "id": "4568",
     "evaluate": true
 }
-
 HTTP 200
 [Asserts]
 header "X-Frame-Options" == "SAMEORIGIN"
@@ -48,7 +46,6 @@ jsonpath "$.id" matches /\d{4}/     # Check the format of the id
 
 ```hurl
 GET https://example.org
-
 HTTP 200
 [Asserts]
 xpath "normalize-space(//head/title)" == "Hello world!"

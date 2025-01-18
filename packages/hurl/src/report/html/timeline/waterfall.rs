@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ use crate::report::html::timeline::util::{
 };
 use crate::report::html::timeline::{svg, CallContext, CallContextKind, CALL_HEIGHT, CALL_INSET};
 use crate::report::html::Testcase;
+use crate::util::redacted::Redact;
 
 /// Returns the start and end date for these entries.
 fn get_times_interval(calls: &[&Call]) -> Option<Interval<DateTime<Utc>>> {
@@ -52,7 +53,12 @@ fn get_times_interval(calls: &[&Call]) -> Option<Interval<DateTime<Utc>>> {
 
 impl Testcase {
     /// Returns the SVG string of this list of `calls`.
-    pub fn get_waterfall_svg(&self, calls: &[&Call], call_ctxs: &[CallContext]) -> String {
+    pub fn get_waterfall_svg(
+        &self,
+        calls: &[&Call],
+        call_ctxs: &[CallContext],
+        secrets: &[&str],
+    ) -> String {
         // Compute our scale (transform 0 based microsecond to 0 based pixels):
         let times = get_times_interval(calls);
         let times = match times {
@@ -100,8 +106,9 @@ impl Testcase {
         );
         root.add_child(grid);
 
-        let elts = zip(calls, call_ctxs)
-            .map(|(call, call_ctx)| new_call(call, call_ctx, times, scale_x, pixels_x, pixels_y));
+        let elts = zip(calls, call_ctxs).map(|(call, call_ctx)| {
+            new_call(call, call_ctx, times, scale_x, pixels_x, pixels_y, secrets)
+        });
 
         // We construct SVG calls from last to first so the detail of any call is not overridden
         // by the next call.
@@ -168,13 +175,14 @@ fn new_vert_lines(
 
     // Draw the vertical lines:
     let mut lines = svg::new_group();
+    lines.add_attr(Class("grid-ticks".to_string()));
     lines.add_attr(Stroke("#ccc".to_string()));
     values.iter().for_each(|(x, _)| {
         if *x <= 0.0 {
             return;
         }
         let elt = svg::new_line(*x, 0.0, *x, pixels_y.end.0);
-        lines.add_child(elt)
+        lines.add_child(elt);
     });
     group.add_child(lines);
 
@@ -202,13 +210,14 @@ fn new_call(
     scale_x: Scale,
     pixels_x: Interval<Pixel>,
     pixels_y: Interval<Pixel>,
+    secrets: &[&str],
 ) -> Element {
     let mut call_elt = svg::new_group();
 
     let summary = new_call_timings(call, call_ctx, times, scale_x, pixels_y);
     call_elt.add_child(summary);
 
-    let detail = new_call_tooltip(call, call_ctx, times, scale_x, pixels_x, pixels_y);
+    let detail = new_call_tooltip(call, call_ctx, times, scale_x, pixels_x, pixels_y, secrets);
     call_elt.add_child(detail);
 
     call_elt
@@ -230,7 +239,9 @@ fn new_call_timings(
     let height = CALL_HEIGHT - CALL_INSET * 2;
 
     // DNS
-    let dns_x = (call.timings.begin_call - times.start).to_std().unwrap();
+    let dns_x = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let dns_x = to_pixel(dns_x, scale_x);
     let dns_width = to_pixel(call.timings.name_lookup, scale_x);
     if dns_width.0 > 0.0 {
@@ -303,6 +314,7 @@ fn new_call_tooltip(
     scale_x: Scale,
     pixels_x: Interval<Pixel>,
     pixels_y: Interval<Pixel>,
+    secrets: &[&str],
 ) -> Element {
     let mut group = svg::new_group();
     group.add_attr(Class("call-detail".to_string()));
@@ -311,7 +323,9 @@ fn new_call_tooltip(
 
     let width = 600.px();
     let height = 235.px();
-    let offset_x = (call.timings.begin_call - times.start).to_std().unwrap();
+    let offset_x = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let offset_x = to_pixel(offset_x, scale_x);
     let offset_y = CALL_HEIGHT * (call_ctx.call_index - 1) + pixels_y.start;
     let offset_y = offset_y + CALL_HEIGHT - CALL_INSET;
@@ -327,6 +341,7 @@ fn new_call_tooltip(
     let mut y = offset_y;
 
     let mut elt = svg::new_rect(x.0, y.0, width.0, height.0, "white");
+    elt.add_attr(Class("call-back".to_string()));
     elt.add_attr(Filter("url(#shadow)".to_string()));
     elt.add_attr(Stroke("#ccc".to_string()));
     elt.add_attr(StrokeWidth(1.0));
@@ -335,6 +350,10 @@ fn new_call_tooltip(
     x += 14.px();
     y += 14.px();
     let delta_y = 30.px();
+
+    let mut legend = svg::new_group();
+    legend.add_attr(Class("call-legend".to_string()));
+    legend.add_attr(Fill("#555".to_string()));
 
     // Icon + URL + method
     let mut elt = svg::new_use();
@@ -348,19 +367,18 @@ fn new_call_tooltip(
     elt.add_attr(Y(y.0));
     elt.add_attr(Width("20".to_string()));
     elt.add_attr(Height("20".to_string()));
-    group.add_child(elt);
+    legend.add_child(elt);
 
-    let text = format!("{} {}", call.request.method, call.request.url);
+    let url = call.request.url.redact(secrets);
+    let text = format!("{} {}", call.request.method, url);
     let text = trunc_str(&text, 54);
     let text = format!("{text}  {}", call.response.status);
     let mut elt = svg::new_text(x.0 + 30.0, y.0 + 16.0, &text);
-    let color = match call_ctx.kind {
-        CallContextKind::Success | CallContextKind::Retry => "#555",
-        CallContextKind::Failure => "red",
-    };
-    elt.add_attr(Fill(color.to_string()));
+    if call_ctx.kind == CallContextKind::Failure {
+        elt.add_attr(Fill("red".to_string()));
+    }
     elt.add_attr(FontWeight("bold".to_string()));
-    group.add_child(elt);
+    legend.add_child(elt);
 
     x += 12.px();
     y += 32.px();
@@ -369,7 +387,7 @@ fn new_call_tooltip(
     let duration = call.timings.name_lookup.as_micros();
     let duration = Microsecond(duration as f64);
     let elt = new_legend(x, y, "DNS lookup", Some("#1d9688"), duration);
-    group.add_child(elt);
+    legend.add_child(elt);
     y += delta_y;
 
     // TCP handshake
@@ -377,7 +395,7 @@ fn new_call_tooltip(
     if let Some(duration) = duration {
         let duration = Microsecond(duration.as_micros() as f64);
         let elt = new_legend(x, y, "TCP handshake", Some("#fa7f03"), duration);
-        group.add_child(elt);
+        legend.add_child(elt);
         y += delta_y;
     }
 
@@ -386,7 +404,7 @@ fn new_call_tooltip(
     if let Some(duration) = duration {
         let duration = Microsecond(duration.as_micros() as f64);
         let elt = new_legend(x, y, "SSL handshake", Some("#9933ff"), duration);
-        group.add_child(elt);
+        legend.add_child(elt);
         y += delta_y;
     }
 
@@ -398,7 +416,7 @@ fn new_call_tooltip(
     if let Some(duration) = duration {
         let duration = Microsecond(duration.as_micros() as f64);
         let elt = new_legend(x, y, "Wait", Some("#18c852"), duration);
-        group.add_child(elt);
+        legend.add_child(elt);
         y += delta_y;
     }
 
@@ -407,7 +425,7 @@ fn new_call_tooltip(
     if let Some(duration) = duration {
         let duration = Microsecond(duration.as_micros() as f64);
         let elt = new_legend(x, y, "Data transfer", Some("#36a9f4"), duration);
-        group.add_child(elt);
+        legend.add_child(elt);
         y += delta_y;
     }
 
@@ -416,29 +434,33 @@ fn new_call_tooltip(
     let duration = Microsecond(duration as f64);
     let mut elt = new_legend(x, y, "Total", None, duration);
     elt.add_attr(FontWeight("bold".to_string()));
-    group.add_child(elt);
+    legend.add_child(elt);
     y += delta_y;
 
     // Start and stop timestamps
-    let start = (call.timings.begin_call - times.start).to_std().unwrap();
-    let end = (call.timings.end_call - times.start).to_std().unwrap();
+    let start = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
+    let end = (call.timings.end_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     x = offset_x + 380.px();
     y = offset_y + 64.px();
     let value = Microsecond(start.as_micros() as f64);
     let value = value.to_human_string();
     let elt = new_value("Start:", &value, x, y);
-    group.add_child(elt);
+    legend.add_child(elt);
     y += delta_y;
     let value = Microsecond(end.as_micros() as f64);
     let value = value.to_human_string();
     let elt = new_value("Stop:", &value, x, y);
-    group.add_child(elt);
+    legend.add_child(elt);
 
     y += delta_y;
     let value = Byte(call.response.body.len() as f64);
     let value = value.to_human_string();
     let elt = new_value("Transferred:", &value, x, y);
-    group.add_child(elt);
+    legend.add_child(elt);
 
     // Run URL
     y += 56.px();
@@ -447,12 +469,12 @@ fn new_call_tooltip(
         call_ctx.run_filename, call_ctx.entry_index, call_ctx.call_entry_index
     );
     let elt = new_link(x, y, "(view run)", &href);
-    group.add_child(elt);
+    legend.add_child(elt);
 
     // Source URL
     let href = format!("{}#l{}", call_ctx.source_filename, call_ctx.line);
     let elt = new_link(x + 90.px(), y, "(view source)", &href);
-    group.add_child(elt);
+    legend.add_child(elt);
 
     // Timings explanation
     y += delta_y;
@@ -462,7 +484,8 @@ fn new_call_tooltip(
         "Explanation",
         "https://hurl.dev/docs/response.html#timings",
     );
-    group.add_child(elt);
+    legend.add_child(elt);
+    group.add_child(legend);
 
     group
 }
@@ -484,9 +507,13 @@ fn new_call_sel(
     scale_x: Scale,
     pixels_y: Interval<Pixel>,
 ) -> Element {
-    let offset_x_start = (call.timings.begin_call - times.start).to_std().unwrap();
+    let offset_x_start = (call.timings.begin_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let offset_x_start = to_pixel(offset_x_start, scale_x);
-    let offset_x_end = (call.timings.end_call - times.start).to_std().unwrap();
+    let offset_x_end = (call.timings.end_call - times.start)
+        .to_std()
+        .unwrap_or_default();
     let offset_x_end = to_pixel(offset_x_end, scale_x);
     let color = match call_ctx.kind {
         CallContextKind::Success | CallContextKind::Retry => "green",
@@ -500,7 +527,7 @@ fn new_call_sel(
         color,
     );
     elt.add_attr(Opacity(0.05));
-    elt.add_attr(Class("call-cell".to_string()));
+    elt.add_attr(Class("call-sel".to_string()));
     elt
 }
 
@@ -522,13 +549,11 @@ fn new_legend(
         group.add_child(color_elt);
     }
 
-    let mut text_elt = svg::new_text((x + dx_label).0, (y + dy_label).0, text);
-    text_elt.add_attr(Fill("#555".to_string()));
+    let text_elt = svg::new_text((x + dx_label).0, (y + dy_label).0, text);
     group.add_child(text_elt);
 
     let duration = duration.to_human_string();
-    let mut duration_elt = svg::new_text((x + dx_duration).0, (y + dy_label).0, &duration);
-    duration_elt.add_attr(Fill("#333".to_string()));
+    let duration_elt = svg::new_text((x + dx_duration).0, (y + dy_label).0, &duration);
     group.add_child(duration_elt);
 
     group
@@ -536,13 +561,11 @@ fn new_legend(
 
 fn new_value(label: &str, value: &str, x: Pixel, y: Pixel) -> Element {
     let mut group = svg::new_group();
-    let mut elt = svg::new_text(x.0, y.0, label);
-    elt.add_attr(Fill("#555".to_string()));
+    let elt = svg::new_text(x.0, y.0, label);
     group.add_child(elt);
 
     let x = x + 100.px();
-    let mut elt = svg::new_text(x.0, y.0, value);
-    elt.add_attr(Fill("#333".to_string()));
+    let elt = svg::new_text(x.0, y.0, value);
     group.add_child(elt);
 
     group
@@ -616,8 +639,8 @@ mod tests {
             elt.to_string(),
             "<g>\
                 <rect x=\"20\" y=\"30\" width=\"20\" height=\"20\" fill=\"red\" />\
-                <text x=\"56\" y=\"47\" fill=\"#555\">Hello world</text>\
-                <text x=\"200\" y=\"47\" fill=\"#333\">2.0 ms</text>\
+                <text x=\"56\" y=\"47\">Hello world</text>\
+                <text x=\"200\" y=\"47\">2.0 ms</text>\
             </g>"
         );
     }
@@ -625,7 +648,7 @@ mod tests {
     #[test]
     fn grid_vert_lines_svg() {
         let start = Utc.with_ymd_and_hms(2022, 1, 1, 8, 0, 0).unwrap();
-        let end = start + Duration::seconds(1);
+        let end = start + Duration::try_seconds(1).unwrap();
         let times = Interval { start, end };
         let start = 0.px();
         let end = 1000.px();
@@ -640,7 +663,7 @@ mod tests {
         assert_eq!(
             elt.to_string(),
             "<g>\
-                <g stroke=\"#ccc\">\
+                <g class=\"grid-ticks\" stroke=\"#ccc\">\
                     <line x1=\"100\" y1=\"0\" x2=\"100\" y2=\"100\" />\
                     <line x1=\"200\" y1=\"0\" x2=\"200\" y2=\"100\" />\
                     <line x1=\"300\" y1=\"0\" x2=\"300\" y2=\"100\" />\
@@ -650,7 +673,7 @@ mod tests {
                     <line x1=\"700\" y1=\"0\" x2=\"700\" y2=\"100\" />\
                     <line x1=\"800\" y1=\"0\" x2=\"800\" y2=\"100\" />\
                     <line x1=\"900\" y1=\"0\" x2=\"900\" y2=\"100\" />\
-                    </g>\
+                </g>\
                 <g font-size=\"15px\" font-family=\"sans-serif\" fill=\"#777\">\
                     <text x=\"5\" y=\"20\">0 ms</text>\
                     <text x=\"105\" y=\"20\">100 ms</text>\

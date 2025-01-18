@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,370 +15,482 @@
  * limitations under the License.
  *
  */
-use chrono::{DateTime, Utc};
-use serde_json::Number;
+use std::fs::File;
+use std::io;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use chrono::SecondsFormat;
+use hurl_core::ast::SourceInfo;
+use hurl_core::error::{DisplaySourceError, OutputFormat};
+use hurl_core::input::Input;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::http::{
     Call, Certificate, Cookie, Header, HttpVersion, Param, Request, RequestCookie, Response,
     ResponseCookie, Timings,
 };
 use crate::runner::{AssertResult, CaptureResult, EntryResult, HurlResult};
-use crate::util::logger;
 
 impl HurlResult {
     /// Serializes an [`HurlResult`] to a JSON representation.
     ///
-    /// Note: `content` is passed to this method to save asserts and
-    /// errors messages (with lines and columns). This parameter will be removed
-    /// soon and the original content will be accessible through the [`HurlResult`] instance.
-    pub fn to_json(&self, content: &str, filename: &str) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "filename".to_string(),
-            serde_json::Value::String(filename.to_string()),
-        );
-        let entries = self
+    /// Note: `content` is passed to this method to save asserts and errors messages (with lines
+    /// and columns). This parameter will be removed soon and the original content will be
+    /// accessible through the [`HurlResult`] instance.
+    /// An optional directory `response_dir` can be used to save HTTP response.
+    pub fn to_json(
+        &self,
+        content: &str,
+        filename: &Input,
+        response_dir: Option<&Path>,
+    ) -> Result<serde_json::Value, io::Error> {
+        let result = HurlResultJson::from_result(self, content, filename, response_dir)?;
+        let value = serde_json::to_value(result).unwrap();
+        Ok(value)
+    }
+
+    /// Checks if a JSON value can be deserialized to a `HurlResult` instance.
+    /// This method can be used to check if the schema of the `value` is conform to
+    /// a `HurlResult`.
+    pub fn is_deserializable(value: &serde_json::Value) -> bool {
+        serde_json::from_value::<HurlResultJson>(value.clone()).is_ok()
+    }
+}
+
+/// These structures represent the JSON schema used to serialize an [`HurlResult`] to JSON.
+#[derive(Deserialize, Serialize)]
+struct HurlResultJson {
+    filename: String,
+    entries: Vec<EntryResultJson>,
+    success: bool,
+    time: u64,
+    cookies: Vec<CookieJson>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct EntryResultJson {
+    index: usize,
+    line: usize,
+    calls: Vec<CallJson>,
+    captures: Vec<CaptureJson>,
+    asserts: Vec<AssertJson>,
+    time: u64,
+    curl_cmd: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CookieJson {
+    domain: String,
+    include_subdomain: String,
+    path: String,
+    https: String,
+    expires: String,
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CallJson {
+    request: RequestJson,
+    response: ResponseJson,
+    timings: TimingsJson,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CaptureJson {
+    name: String,
+    value: serde_json::Value,
+}
+
+#[derive(Deserialize, Serialize)]
+struct AssertJson {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    line: usize,
+}
+
+#[derive(Deserialize, Serialize)]
+struct RequestJson {
+    method: String,
+    url: String,
+    headers: Vec<HeaderJson>,
+    cookies: Vec<RequestCookieJson>,
+    query_string: Vec<ParamJson>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ResponseJson {
+    http_version: String,
+    status: u32,
+    headers: Vec<HeaderJson>,
+    cookies: Vec<ResponseCookieJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certificate: Option<CertificateJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TimingsJson {
+    begin_call: String,
+    end_call: String,
+    name_lookup: u64,
+    connect: u64,
+    app_connect: u64,
+    pre_transfer: u64,
+    start_transfer: u64,
+    total: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+struct HeaderJson {
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct RequestCookieJson {
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ParamJson {
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ResponseCookieJson {
+    name: String,
+    value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires: Option<String>,
+    // FIXME: maybe max_age should be u64
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_age: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secure: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "httponly")]
+    http_only: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "same_site")]
+    same_site: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CertificateJson {
+    subject: String,
+    issuer: String,
+    start_date: String,
+    expire_date: String,
+    serial_number: String,
+}
+
+impl HurlResultJson {
+    fn from_result(
+        result: &HurlResult,
+        content: &str,
+        filename: &Input,
+        response_dir: Option<&Path>,
+    ) -> Result<Self, io::Error> {
+        let entries = result
             .entries
             .iter()
-            .map(|e| e.to_json(filename, content))
-            .collect();
-        map.insert("entries".to_string(), serde_json::Value::Array(entries));
-        map.insert("success".to_string(), serde_json::Value::Bool(self.success));
-        map.insert(
-            "time".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(self.time_in_ms as u64)),
-        );
-        let cookies = self.cookies.iter().map(|e| e.to_json()).collect();
-        map.insert("cookies".to_string(), serde_json::Value::Array(cookies));
-        serde_json::Value::Object(map)
+            .map(|e| EntryResultJson::from_entry(e, content, filename, response_dir))
+            .collect::<Result<Vec<_>, _>>()?;
+        let cookies = result
+            .cookies
+            .iter()
+            .map(CookieJson::from_cookie)
+            .collect::<Vec<_>>();
+        Ok(HurlResultJson {
+            filename: filename.to_string(),
+            entries,
+            success: result.success,
+            time: result.duration.as_millis() as u64,
+            cookies,
+        })
     }
 }
 
-impl EntryResult {
-    fn to_json(&self, filename: &str, content: &str) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-
-        map.insert(
-            "index".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(self.entry_index)),
-        );
-        let calls = self.calls.iter().map(|c| c.to_json()).collect();
-        map.insert("calls".to_string(), calls);
-        let captures = self.captures.iter().map(|c| c.to_json()).collect();
-        map.insert("captures".to_string(), captures);
-        let asserts = self
+impl EntryResultJson {
+    fn from_entry(
+        entry: &EntryResult,
+        content: &str,
+        filename: &Input,
+        response_dir: Option<&Path>,
+    ) -> Result<Self, io::Error> {
+        let calls = entry
+            .calls
+            .iter()
+            .map(|c| CallJson::from_call(c, response_dir))
+            .collect::<Result<Vec<_>, _>>()?;
+        let captures = entry
+            .captures
+            .iter()
+            .map(CaptureJson::from_capture)
+            .collect::<Vec<_>>();
+        let asserts = entry
             .asserts
             .iter()
-            .map(|a| a.to_json(filename, content))
-            .collect();
-        map.insert("asserts".to_string(), asserts);
-        map.insert(
-            "time".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(self.time_in_ms as u64)),
-        );
-        serde_json::Value::Object(map)
+            .map(|a| AssertJson::from_assert(a, content, filename, entry.source_info))
+            .collect::<Vec<_>>();
+        Ok(EntryResultJson {
+            index: entry.entry_index,
+            line: entry.source_info.start.line,
+            calls,
+            captures,
+            asserts,
+            time: entry.transfer_duration.as_millis() as u64,
+            curl_cmd: entry.curl_cmd.to_string(),
+        })
     }
 }
 
-impl Call {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert("request".to_string(), self.request.to_json());
-        map.insert("response".to_string(), self.response.to_json());
-        map.insert("timings".to_string(), self.timings.to_json());
-        serde_json::Value::Object(map)
-    }
-}
-
-impl Request {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "method".to_string(),
-            serde_json::Value::String(self.method.clone()),
-        );
-        map.insert(
-            "url".to_string(),
-            serde_json::Value::String(self.url.clone()),
-        );
-        let headers = self.headers.iter().map(|h| h.to_json()).collect();
-        map.insert("headers".to_string(), headers);
-        let cookies = self.cookies().iter().map(|e| e.to_json()).collect();
-        map.insert("cookies".to_string(), serde_json::Value::Array(cookies));
-        let query_string = self
-            .query_string_params()
-            .iter()
-            .map(|e| e.to_json())
-            .collect();
-        map.insert(
-            "queryString".to_string(),
-            serde_json::Value::Array(query_string),
-        );
-        serde_json::Value::Object(map)
-    }
-}
-
-impl Response {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert("httpVersion".to_string(), self.version.to_json());
-        map.insert(
-            "status".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(self.status)),
-        );
-        let headers = self.headers.iter().map(|h| h.to_json()).collect();
-        map.insert("headers".to_string(), headers);
-        let cookies = self.cookies().iter().map(|e| e.to_json()).collect();
-        map.insert("cookies".to_string(), serde_json::Value::Array(cookies));
-        if let Some(certificate) = &self.certificate {
-            map.insert("certificate".to_string(), certificate.to_json());
+impl CookieJson {
+    fn from_cookie(c: &Cookie) -> Self {
+        CookieJson {
+            domain: c.domain.clone(),
+            include_subdomain: c.include_subdomain.clone(),
+            path: c.path.clone(),
+            https: c.https.clone(),
+            expires: c.expires.clone(),
+            name: c.name.clone(),
+            value: c.value.clone(),
         }
-        serde_json::Value::Object(map)
     }
 }
 
-impl Header {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "name".to_string(),
-            serde_json::Value::String(self.name.clone()),
-        );
-        map.insert(
-            "value".to_string(),
-            serde_json::Value::String(self.value.clone()),
-        );
-        serde_json::Value::Object(map)
+impl CallJson {
+    fn from_call(call: &Call, response_dir: Option<&Path>) -> Result<Self, io::Error> {
+        let request = RequestJson::from_request(&call.request);
+        let response = ResponseJson::from_response(&call.response, response_dir)?;
+        let timings = TimingsJson::from_timings(&call.timings);
+        Ok(CallJson {
+            request,
+            response,
+            timings,
+        })
     }
 }
 
-impl HttpVersion {
-    fn to_json(self) -> serde_json::Value {
-        let value = match self {
+impl RequestJson {
+    fn from_request(request: &Request) -> Self {
+        let headers = request
+            .headers
+            .iter()
+            .map(HeaderJson::from_header)
+            .collect::<Vec<_>>();
+        let cookies = request
+            .cookies()
+            .iter()
+            .map(RequestCookieJson::from_cookie)
+            .collect::<Vec<_>>();
+        let query_string = request
+            .url
+            .query_params()
+            .iter()
+            .map(ParamJson::from_param)
+            .collect::<Vec<_>>();
+        RequestJson {
+            method: request.method.clone(),
+            url: request.url.to_string(),
+            headers,
+            cookies,
+            query_string,
+        }
+    }
+}
+
+impl ResponseJson {
+    fn from_response(response: &Response, response_dir: Option<&Path>) -> Result<Self, io::Error> {
+        let http_version = match response.version {
             HttpVersion::Http10 => "HTTP/1.0",
             HttpVersion::Http11 => "HTTP/1.1",
             HttpVersion::Http2 => "HTTP/2",
             HttpVersion::Http3 => "HTTP/3",
         };
-        serde_json::Value::String(value.to_string())
+        let headers = response
+            .headers
+            .iter()
+            .map(HeaderJson::from_header)
+            .collect::<Vec<_>>();
+        let cookies = response
+            .cookies()
+            .iter()
+            .map(ResponseCookieJson::from_cookie)
+            .collect::<Vec<_>>();
+        let certificate = response
+            .certificate
+            .as_ref()
+            .map(CertificateJson::from_certificate);
+        let body = match response_dir {
+            Some(response_dir) => {
+                // FIXME: we save the filename and the parent dir: this feature is used in the
+                // context of the JSON report where the response are stored:
+                //
+                // ```
+                // response_dir
+                // ├── report.json
+                // └── store
+                //     ├── 1fe9d647-5689-4130-b4ea-dc120c2536ba_response.html
+                //     ├── 35f49c69-15f9-43df-a672-a1ff5f68c935_response.json
+                //     ...
+                //     └── ce7f1326-2e2a-46e9-befd-ee0d85084814_response.json
+                // ```
+                // we want the `body` field to reference the relative path of a response compared
+                // to `report.json`.
+                let file = write_response(response, response_dir)?;
+                let parent = response_dir.components().last().unwrap();
+                let parent: &Path = parent.as_ref();
+                Some(format!("{}/{}", parent.display(), file.display()))
+            }
+            None => None,
+        };
+        Ok(ResponseJson {
+            http_version: http_version.to_string(),
+            status: response.status,
+            headers,
+            cookies,
+            certificate,
+            body,
+        })
     }
 }
 
-impl Param {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "name".to_string(),
-            serde_json::Value::String(self.name.clone()),
-        );
-        map.insert(
-            "value".to_string(),
-            serde_json::Value::String(self.value.clone()),
-        );
-        serde_json::Value::Object(map)
-    }
-}
-
-impl RequestCookie {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "name".to_string(),
-            serde_json::Value::String(self.name.clone()),
-        );
-        map.insert(
-            "value".to_string(),
-            serde_json::Value::String(self.value.clone()),
-        );
-        serde_json::Value::Object(map)
-    }
-}
-
-impl ResponseCookie {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "name".to_string(),
-            serde_json::Value::String(self.name.clone()),
-        );
-        map.insert(
-            "value".to_string(),
-            serde_json::Value::String(self.value.clone()),
-        );
-
-        if let Some(expires) = &self.expires() {
-            map.insert(
-                "expires".to_string(),
-                serde_json::Value::String(expires.to_string()),
-            );
+impl TimingsJson {
+    fn from_timings(timings: &Timings) -> Self {
+        TimingsJson {
+            begin_call: timings
+                .begin_call
+                .to_rfc3339_opts(SecondsFormat::Micros, true),
+            end_call: timings
+                .end_call
+                .to_rfc3339_opts(SecondsFormat::Micros, true),
+            name_lookup: timings.name_lookup.as_micros() as u64,
+            connect: timings.connect.as_micros() as u64,
+            app_connect: timings.app_connect.as_micros() as u64,
+            pre_transfer: timings.pre_transfer.as_micros() as u64,
+            start_transfer: timings.start_transfer.as_micros() as u64,
+            total: timings.total.as_micros() as u64,
         }
-        if let Some(max_age) = &self.max_age() {
-            map.insert(
-                "max_age".to_string(),
-                serde_json::Value::String(max_age.to_string()),
-            );
-        }
-        if let Some(domain) = &self.domain() {
-            map.insert(
-                "domain".to_string(),
-                serde_json::Value::String(domain.to_string()),
-            );
-        }
-        if let Some(path) = &self.path() {
-            map.insert(
-                "path".to_string(),
-                serde_json::Value::String(path.to_string()),
-            );
-        }
-        if self.has_secure() {
-            map.insert("secure".to_string(), serde_json::Value::Bool(true));
-        }
-        if self.has_httponly() {
-            map.insert("httponly".to_string(), serde_json::Value::Bool(true));
-        }
-        if let Some(samesite) = &self.samesite() {
-            map.insert(
-                "samesite".to_string(),
-                serde_json::Value::String(samesite.to_string()),
-            );
-        }
-        serde_json::Value::Object(map)
     }
 }
 
-impl Certificate {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "subject".to_string(),
-            serde_json::Value::String(self.subject.clone()),
-        );
-        map.insert(
-            "issue".to_string(),
-            serde_json::Value::String(self.issuer.clone()),
-        );
-        map.insert("start_date".to_string(), json_date(self.start_date));
-        map.insert("expire_date".to_string(), json_date(self.expire_date));
-        map.insert(
-            "serial_number".to_string(),
-            serde_json::Value::String(self.serial_number.clone()),
-        );
-        serde_json::Value::Object(map)
-    }
-}
-
-impl Timings {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "begin_call".to_string(),
-            serde_json::Value::String(self.begin_call.to_string()),
-        );
-        map.insert(
-            "end_call".to_string(),
-            serde_json::Value::String(self.end_call.to_string()),
-        );
-        let value = self.name_lookup.as_micros() as u64;
-        map.insert(
-            "name_lookup".to_string(),
-            serde_json::Value::Number(Number::from(value)),
-        );
-        let value = self.connect.as_micros() as u64;
-        map.insert(
-            "connect".to_string(),
-            serde_json::Value::Number(Number::from(value)),
-        );
-        let value = self.app_connect.as_micros() as u64;
-        map.insert(
-            "app_connect".to_string(),
-            serde_json::Value::Number(Number::from(value)),
-        );
-        let value = self.pre_transfer.as_micros() as u64;
-        map.insert(
-            "pre_transfer".to_string(),
-            serde_json::Value::Number(Number::from(value)),
-        );
-        let value = self.start_transfer.as_micros() as u64;
-        map.insert(
-            "start_transfer".to_string(),
-            serde_json::Value::Number(Number::from(value)),
-        );
-        let value = self.total.as_micros() as u64;
-        map.insert(
-            "total".to_string(),
-            serde_json::Value::Number(Number::from(value)),
-        );
-        serde_json::Value::Object(map)
-    }
-}
-
-impl CaptureResult {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "name".to_string(),
-            serde_json::Value::String(self.name.clone()),
-        );
-        map.insert("value".to_string(), self.value.to_json());
-        serde_json::Value::Object(map)
-    }
-}
-
-impl AssertResult {
-    fn to_json(&self, filename: &str, content: &str) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-
-        let success = self.error().is_none();
-        map.insert("success".to_string(), serde_json::Value::Bool(success));
-
-        if let Some(err) = self.error() {
-            let message = logger::error_string(filename, content, &err, false);
-            map.insert("message".to_string(), serde_json::Value::String(message));
+impl HeaderJson {
+    fn from_header(h: &Header) -> Self {
+        HeaderJson {
+            name: h.name.clone(),
+            value: h.value.clone(),
         }
-        map.insert(
-            "line".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(self.line())),
-        );
-
-        serde_json::Value::Object(map)
     }
 }
 
-impl Cookie {
-    fn to_json(&self) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "domain".to_string(),
-            serde_json::Value::String(self.domain.clone()),
-        );
-        map.insert(
-            "include_subdomain".to_string(),
-            serde_json::Value::String(self.include_subdomain.clone()),
-        );
-        map.insert(
-            "path".to_string(),
-            serde_json::Value::String(self.path.clone()),
-        );
-        map.insert(
-            "https".to_string(),
-            serde_json::Value::String(self.https.clone()),
-        );
-        map.insert(
-            "expires".to_string(),
-            serde_json::Value::String(self.expires.clone()),
-        );
-        map.insert(
-            "name".to_string(),
-            serde_json::Value::String(self.name.clone()),
-        );
-        map.insert(
-            "value".to_string(),
-            serde_json::Value::String(self.value.clone()),
-        );
-        serde_json::Value::Object(map)
+impl RequestCookieJson {
+    fn from_cookie(c: &RequestCookie) -> Self {
+        RequestCookieJson {
+            name: c.name.clone(),
+            value: c.value.clone(),
+        }
     }
 }
 
-fn json_date(value: DateTime<Utc>) -> serde_json::Value {
-    serde_json::Value::String(value.to_string())
+impl ParamJson {
+    fn from_param(p: &Param) -> Self {
+        ParamJson {
+            name: p.name.clone(),
+            value: p.value.clone(),
+        }
+    }
+}
+
+impl ResponseCookieJson {
+    fn from_cookie(c: &ResponseCookie) -> Self {
+        ResponseCookieJson {
+            name: c.name.clone(),
+            value: c.value.clone(),
+            expires: c.expires(),
+            max_age: c.max_age().map(|m| m.to_string()),
+            domain: c.domain(),
+            path: c.path(),
+            secure: if c.has_secure() { Some(true) } else { None },
+            http_only: if c.has_httponly() { Some(true) } else { None },
+            same_site: c.samesite(),
+        }
+    }
+}
+
+impl CertificateJson {
+    fn from_certificate(c: &Certificate) -> Self {
+        CertificateJson {
+            subject: c.subject.clone(),
+            issuer: c.issuer.to_string(),
+            start_date: c.start_date.to_string(),
+            expire_date: c.expire_date.to_string(),
+            serial_number: c.serial_number.to_string(),
+        }
+    }
+}
+
+impl CaptureJson {
+    fn from_capture(c: &CaptureResult) -> Self {
+        CaptureJson {
+            name: c.name.clone(),
+            value: c.value.to_json(),
+        }
+    }
+}
+
+impl AssertJson {
+    fn from_assert(
+        a: &AssertResult,
+        content: &str,
+        filename: &Input,
+        entry_src_info: SourceInfo,
+    ) -> Self {
+        let message = a.error().map(|err| {
+            err.to_string(
+                &filename.to_string(),
+                content,
+                Some(entry_src_info),
+                OutputFormat::Plain,
+            )
+        });
+        AssertJson {
+            success: a.error().is_none(),
+            message,
+            line: a.line(),
+        }
+    }
+}
+
+/// Write the HTTP `response` body to directory `dir`.
+fn write_response(response: &Response, dir: &Path) -> Result<PathBuf, io::Error> {
+    let extension = if response.is_json() {
+        Some("json")
+    } else if response.is_xml() {
+        Some("xml")
+    } else if response.is_html() {
+        Some("html")
+    } else {
+        None
+    };
+    let id = Uuid::new_v4();
+    let relative_path = format!("{id}_response");
+    let relative_path = Path::new(&relative_path);
+    let relative_path = match extension {
+        Some(ext) => relative_path.with_extension(ext),
+        None => relative_path.to_path_buf(),
+    };
+    let path = dir.join(relative_path.clone());
+    let mut file = File::create(path)?;
+    file.write_all(&response.body)?;
+    Ok(relative_path)
 }

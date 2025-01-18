@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,6 @@
  * limitations under the License.
  *
  */
-
-use float_cmp::approx_eq;
 
 use crate::jsonpath::ast::{Predicate, PredicateFunc, Selector, Slice};
 use crate::jsonpath::JsonpathResult;
@@ -137,7 +135,7 @@ impl Selector {
                 let mut values = vec![];
                 for index in indexes {
                     if let Some(value) = root.get(index) {
-                        values.push(value.clone())
+                        values.push(value.clone());
                     }
                 }
                 Some(JsonpathResult::Collection(values))
@@ -154,8 +152,8 @@ impl Predicate {
                     match (value, self.func.clone()) {
                         (_, PredicateFunc::KeyExist) => true,
                         (serde_json::Value::Number(v), PredicateFunc::Equal(ref num)) => {
-                            approx_eq!(f64, v.as_f64().unwrap(), num.to_f64(), ulps = 2)
-                        } //v.as_f64().unwrap() == num.to_f64(),
+                            (v.as_f64().unwrap() - num.to_f64()).abs() < f64::EPSILON
+                        }
                         (serde_json::Value::Number(v), PredicateFunc::GreaterThan(ref num)) => {
                             v.as_f64().unwrap() > num.to_f64()
                         }
@@ -172,6 +170,13 @@ impl Predicate {
                         (serde_json::Value::String(v), PredicateFunc::EqualString(ref s)) => {
                             v == *s
                         }
+                        (serde_json::Value::String(v), PredicateFunc::NotEqualString(ref s)) => {
+                            v != *s
+                        }
+                        (serde_json::Value::Number(v), PredicateFunc::NotEqual(ref num)) => {
+                            (v.as_f64().unwrap() - num.to_f64()).abs() >= f64::EPSILON
+                        }
+                        (serde_json::Value::Bool(v), PredicateFunc::EqualBool(ref s)) => v == *s,
                         _ => false,
                     }
                 } else {
@@ -392,6 +397,18 @@ mod tests {
             }),
         }
         .eval(json!({"key": 1})));
+
+        assert!(Predicate {
+            key: vec!["key".to_string()],
+            func: PredicateFunc::EqualBool(true),
+        }
+        .eval(json!({"key": true})));
+
+        assert!(Predicate {
+            key: vec!["key".to_string()],
+            func: PredicateFunc::EqualBool(false),
+        }
+        .eval(json!({"key": false})));
     }
 
     #[test]

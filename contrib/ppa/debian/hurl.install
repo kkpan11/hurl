@@ -1,0 +1,6 @@
+target/release/hurl    usr/bin
+target/release/hurlfmt    usr/bin
+target/man/hurl.1.gz    usr/share/man/man1
+target/man/hurlfmt.1.gz    usr/share/man/man1
+debian/copyright    usr/share/doc/hurl
+changelog.Debian.gz    usr/share/doc/hurl

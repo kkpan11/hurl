@@ -46,3 +46,26 @@ body {
     overflow: auto;
     overflow-y: hidden;
 }
+
+
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #19191c;
+        color: #c2c2c2;
+    }
+
+    .source-container {
+        border-color: #444;
+        background-color: #27272c;
+    }
+
+    .line-numbers {
+        padding: 8px 10px;
+        border-right-color: #444;
+        background: #19191c;
+    }
+
+    .line-numbers a {
+        color: dimgray;
+    }
+}

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,30 @@
  * limitations under the License.
  *
  */
-use crate::http::{Header, Method, Param, RequestCookie, RequestSpec, Response};
+use std::str::FromStr;
+
+use crate::http::{
+    Header, HeaderVec, HttpVersion, Method, Param, RequestCookie, RequestSpec, Response, Url,
+};
 
 /// Some Request Response to be used by tests
+
+fn default_response() -> Response {
+    Response {
+        version: HttpVersion::Http10,
+        status: 200,
+        headers: HeaderVec::new(),
+        body: vec![],
+        duration: Default::default(),
+        url: Url::from_str("http://localhost").unwrap(),
+        certificate: None,
+    }
+}
 
 pub fn hello_http_request() -> RequestSpec {
     RequestSpec {
         method: Method("GET".to_string()),
-        url: "http://localhost:8000/hello".to_string(),
+        url: Url::from_str("http://localhost:8000/hello").unwrap(),
         ..Default::default()
     }
 }
@@ -42,16 +58,17 @@ pub fn json_http_response() -> Response {
 "#
             .to_string(),
         ),
-        ..Default::default()
+        ..default_response()
     }
 }
 
 pub fn xml_two_users_http_response() -> Response {
+    let mut headers = HeaderVec::new();
+    headers.push(Header::new("Content-Type", "text/html; charset=utf-8"));
+    headers.push(Header::new("Content-Length", "12"));
+
     Response {
-        headers: vec![
-            Header::new("Content-Type", "text/html; charset=utf-8"),
-            Header::new("Content-Length", "12"),
-        ],
+        headers,
         body: String::into_bytes(
             r#"
 <?xml version="1.0"?>
@@ -62,16 +79,17 @@ pub fn xml_two_users_http_response() -> Response {
 "#
             .to_string(),
         ),
-        ..Default::default()
+        ..default_response()
     }
 }
 
 pub fn xml_three_users_http_response() -> Response {
+    let mut headers = HeaderVec::new();
+    headers.push(Header::new("Content-Type", "text/html; charset=utf-8"));
+    headers.push(Header::new("Content-Length", "12"));
+
     Response {
-        headers: vec![
-            Header::new("Content-Type", "text/html; charset=utf-8"),
-            Header::new("Content-Length", "12"),
-        ],
+        headers,
         body: String::into_bytes(
             r#"
 <?xml version="1.0"?>
@@ -83,46 +101,51 @@ pub fn xml_three_users_http_response() -> Response {
 "#
             .to_string(),
         ),
-        ..Default::default()
+        ..default_response()
     }
 }
 
 pub fn hello_http_response() -> Response {
+    let mut headers = HeaderVec::new();
+    headers.push(Header::new("Content-Type", "text/html; charset=utf-8"));
+    headers.push(Header::new("Content-Length", "12"));
+
     Response {
-        headers: vec![
-            Header::new("Content-Type", "text/html; charset=utf-8"),
-            Header::new("Content-Length", "12"),
-        ],
+        headers,
         body: String::into_bytes(String::from("Hello World!")),
-        ..Default::default()
+        ..default_response()
     }
 }
 
 pub fn bytes_http_response() -> Response {
+    let mut headers = HeaderVec::new();
+    headers.push(Header::new("Content-Type", "application/octet-stream"));
+    headers.push(Header::new("Content-Length", "1"));
+
     Response {
-        headers: vec![
-            Header::new("Content-Type", "application/octet-stream"),
-            Header::new("Content-Length", "1"),
-        ],
+        headers,
         body: vec![255],
-        ..Default::default()
+        ..default_response()
     }
 }
 
 pub fn html_http_response() -> Response {
+    let mut headers = HeaderVec::new();
+    headers.push(Header::new("Content-Type", "application/octet-stream"));
+
     Response {
-        headers: vec![Header::new("Content-Type", "text/html; charset=utf-8")],
+        headers,
         body: String::into_bytes(String::from(
             "<html><head><meta charset=\"UTF-8\"></head><body><br></body></html>",
         )),
-        ..Default::default()
+        ..default_response()
     }
 }
 
 pub fn query_http_request() -> RequestSpec {
     RequestSpec {
         method: Method("GET".to_string()),
-        url: "http://localhost:8000/querystring-params".to_string(),
+        url: Url::from_str("http://localhost:8000/querystring-params").unwrap(),
         querystring: vec![
             Param {
                 name: String::from("param1"),
@@ -138,13 +161,14 @@ pub fn query_http_request() -> RequestSpec {
 }
 
 pub fn custom_http_request() -> RequestSpec {
+    let mut headers = HeaderVec::new();
+    headers.push(Header::new("User-Agent", "iPhone"));
+    headers.push(Header::new("Foo", "Bar"));
+
     RequestSpec {
         method: Method("GET".to_string()),
-        url: "http://localhost/custom".to_string(),
-        headers: vec![
-            Header::new("User-Agent", "iPhone"),
-            Header::new("Foo", "Bar"),
-        ],
+        url: Url::from_str("http://localhost/custom").unwrap(),
+        headers,
         cookies: vec![
             RequestCookie {
                 name: String::from("theme"),

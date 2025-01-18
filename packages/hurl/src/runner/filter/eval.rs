@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,9 @@
  * limitations under the License.
  *
  */
-
-use std::collections::HashMap;
-
 use hurl_core::ast::{Filter, FilterValue};
 
+use crate::runner::filter::count::eval_count;
 use crate::runner::filter::days_after_now::eval_days_after_now;
 use crate::runner::filter::days_before_now::eval_days_before_now;
 use crate::runner::filter::decode::eval_decode;
@@ -32,31 +30,29 @@ use crate::runner::filter::regex::eval_regex;
 use crate::runner::filter::replace::eval_replace;
 use crate::runner::filter::split::eval_split;
 use crate::runner::filter::to_date::eval_to_date;
+use crate::runner::filter::to_float::eval_to_float;
 use crate::runner::filter::to_int::eval_to_int;
 use crate::runner::filter::url_decode::eval_url_decode;
 use crate::runner::filter::url_encode::eval_url_encode;
 use crate::runner::filter::xpath::eval_xpath;
-
-use crate::runner::{Error, RunnerError, Value};
-
-use super::count::eval_count;
+use crate::runner::{RunnerError, RunnerErrorKind, Value, VariableSet};
 
 /// Apply successive `filter` to an input `value`.
 /// Specify whether they are executed  `in_assert` or not.
 pub fn eval_filters(
-    filters: &Vec<Filter>,
+    filters: &[Filter],
     value: &Value,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     in_assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     let mut value = Some(value.clone());
     for filter in filters {
         value = if let Some(value) = value {
             eval_filter(filter, &value, variables, in_assert)?
         } else {
-            return Err(Error::new(
+            return Err(RunnerError::new(
                 filter.source_info,
-                RunnerError::FilterMissingInput,
+                RunnerErrorKind::FilterMissingInput,
                 in_assert,
             ));
         }
@@ -64,12 +60,13 @@ pub fn eval_filters(
     Ok(value)
 }
 
+/// Evaluates a `filter` with an input `value`, given a set of `variables`.
 pub fn eval_filter(
     filter: &Filter,
     value: &Value,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     in_assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match &filter.value {
         FilterValue::Count => eval_count(value, filter.source_info, in_assert),
         FilterValue::DaysAfterNow => eval_days_after_now(value, filter.source_info, in_assert),
@@ -88,7 +85,7 @@ pub fn eval_filter(
         FilterValue::Regex {
             value: regex_value, ..
         } => eval_regex(value, regex_value, variables, filter.source_info, in_assert),
-        FilterValue::Nth { n, .. } => eval_nth(value, filter.source_info, in_assert, *n),
+        FilterValue::Nth { n, .. } => eval_nth(value, filter.source_info, in_assert, n.as_u64()),
         FilterValue::Replace {
             old_value,
             new_value,
@@ -107,6 +104,7 @@ pub fn eval_filter(
         FilterValue::ToDate { fmt, .. } => {
             eval_to_date(value, fmt, variables, filter.source_info, in_assert)
         }
+        FilterValue::ToFloat => eval_to_float(value, filter.source_info, in_assert),
         FilterValue::ToInt => eval_to_int(value, filter.source_info, in_assert),
         FilterValue::UrlDecode => eval_url_decode(value, filter.source_info, in_assert),
         FilterValue::UrlEncode => eval_url_encode(value, filter.source_info, in_assert),
@@ -115,20 +113,22 @@ pub fn eval_filter(
         }
     }
 }
+
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo};
+    use hurl_core::reader::Pos;
+
     use crate::runner::filter::eval::eval_filters;
-    use crate::runner::{Number, Value};
-    use hurl_core::ast::{Filter, FilterValue, Pos, SourceInfo};
-    use std::collections::HashMap;
+    use crate::runner::{Number, Value, VariableSet};
 
     #[test]
-    pub fn test_filters() {
-        let variables = HashMap::new();
+    fn test_filters() {
+        let variables = VariableSet::new();
 
         assert_eq!(
             eval_filters(
-                &vec![Filter {
+                &[Filter {
                     source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 6)),
                     value: FilterValue::Count,
                 }],

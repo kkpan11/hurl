@@ -77,6 +77,15 @@ $ hurl --verbose --no-output basic.hurl
 Lines beginning with `*` are debug info, lines that begin with `>` are HTTP request headers and lines that begin with
 `<` are HTTP response headers.
 
+In each run request, we can also see a curl command line to replay this particular request:
+
+```shell
+...
+[1;34m*[0m Request can be run with the following curl command:
+[1;34m*[0m curl --cookie 'x-session-id=s%3AEE3wsnrgUPSyAkgJZGa3jMWk7xmOtv4E.kXQpkmNBXnFOqmeSssqXnecF4qqv1D7bKu3rpbEJxmQ' 'http://localhost:3000/not-found'
+...
+```
+
 In verbose mode, HTTP request and response bodies are not displayed in the debug logs. If you need to inspect the 
 request or response body, you can display more logs with [`--very-verbose`] option:
 
@@ -203,7 +212,6 @@ $ hurl --very-verbose --no-output basic.hurl
 [`--very-verbose`] output is much more verbose; with body request and response, [`libcurl`] logs and [response timings] 
 are displayed. 
 
-
 ### Debugging a specific entry
 
 If you have a lot of entries (request / response pairs) in your Hurl file, using [`--verbose`] or [`--very-verbose`]
@@ -325,6 +333,50 @@ $ hurl --error-format long --test basic.hurl
 [1mbasic.hurl[0m: [1;31mFailure[0m (4 request(s) in 23 ms)
 ```
 
+## Get Response Body
+
+When there are errors (HTTP runtimes or asserts errors), Hurl doesn't output HTTP response body. But sometimes the response
+body is necessary to explain failures. To do so, either:
+
+- use [`--very-verbose`] globally or per-request to get the full body response
+
+```hurl
+GET https://foo.com/success
+HTTP 200
+
+GET https://foo.com/failure
+[Options]
+very-verbose: true
+HTTP 200
+
+GET https://foo.com/success
+HTTP 200
+```
+
+- use [`--output`] per-request and [`--ignore-asserts`]: `--ignore-asserts` will disable any check, while `--output` can
+be used to output any particular response body. With this file, the response of `https://foo.com/failure` will be outputted
+on standard output:
+
+```hurl
+GET https://foo.com/success
+HTTP 200
+
+GET https://foo.com/failure
+[Options]
+# use - to output on standard output, foo.bin to save on disk 
+output: -
+HTTP 200
+
+GET https://foo.com/success
+HTTP 200
+```
+
+To get more information, one can also used a JSON report with [`--report-json`]. This option produces a structured export
+of all run datas (request headers, response headers, response body, curl debug command line etc...)
+
+```shell
+$ hurl --report-json /tmp/report *.hurl
+```
 
 
 ## Interactive Mode
@@ -424,6 +476,21 @@ $ hurl -i --to-entry 2 basic.hurl
 </html>
 ```
 
+## Export curl Commands
+
+[`--curl`] command line option can be used to produce a file of curl commands of a run. This is equivalent of running 
+Hurl in verbose and grepping the standard error for the debug curl command. The produced file is just a text list of 
+curl debug commands, one line per entry (retry command are not written).
+
+```shell
+$ echo 'HEAD https://example.org' | hurl --repeat 3 --curl /tmp/curl.txt
+$ cat /tmp/curl.txt
+curl --head 'https://example.org'
+curl --head 'https://example.org'
+curl --head 'https://example.org'
+```
+
+
 ## Using a Proxy
 
 Finally, you can use a proxy between Hurl and your server to inspect requests and responses.
@@ -459,3 +526,7 @@ the returned response to Hurl.
 [`--error-format`]: /docs/manual.md#error-format
 [`libcurl`]: https://curl.se/libcurl/
 [response timings]: /docs/response.md#timings
+[`--ignore-asserts`]: /docs/manual.md#ignore-asserts
+[`--output`]: /docs/manual.md#output
+[`--curl`]: /docs/manual.md#curl
+[`--report-json`]: /docs/manual.md#report-json

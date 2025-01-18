@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,9 +18,14 @@
 
 use crate::http::{Request, Response, Timings};
 
+/// Holds an HTTP request and the corresponding HTTP response.
+/// The request and responses are the runtime, evaluated data created by an HTTP exchange.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Call {
+    /// The real HTTP request (vs the specified request in a Hurl file source)
     pub request: Request,
+    /// The real HTTP response (vs the specified request in a Hurl file source)
     pub response: Response,
+    /// Timings of the exchange, see <https://hurl.dev/docs/response.html#timings>
     pub timings: Timings,
 }

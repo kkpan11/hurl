@@ -19,24 +19,27 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
-    - name: Install Python 3.10
-      uses: actions/setup-python@v4
+    - name: Install prerequisites
+      run: bin/install_prerequisites_ubuntu.sh
+    - name: Install Python 3.11
+      uses: actions/setup-python@v5.3.0
       with:
-        python-version: '3.10'
-    - name: Install python3 venv
+        python-version: '3.11'
+    - name: Activate python3 venv
       run: |
-        bin/install_python3_venv.sh
-        export PATH=/tmp/hurl-python3-venv/bin:$PATH
+        bin/activate_python3_venv.sh
+        export PATH="/tmp/hurl-python3-venv/bin:$PATH"
+        echo "PATH=$PATH" >> $GITHUB_ENV
         which python3
         python3 --version
         pip --version
-    - name: Install
-      run: |
-        bin/install_prerequisites_ubuntu.sh
-        bin/install_rust.sh
+    - name : Environment
+      run: bin/environment.sh
+    - name: Install rust
+      run: bin/install_rust.sh
     - name: Build
       run: |
         bin/release/release.sh
@@ -50,9 +53,57 @@ jobs:
         bin/release/man.sh
         bin/release/create_tarball.sh
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       with:
         name: release-generic-linux-x64-artifacts
+        path: target/upload/*
+
+  package-generic-linux-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4.2.2
+      with:
+        ref: ${{ inputs.branch }}
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3.3.0
+    - name: Create package
+      uses: addnab/docker-run-action@v3
+      with:
+        image: ubuntu:22.04
+        options: --platform linux/arm64/v8 --volume ${{ github.workspace }}:/work --workdir /work --privileged --env CARGO_TERM_COLOR=always --env CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu
+        run: |
+          set -e
+          echo "::group::Install Prerequisites"
+            bin/install_prerequisites_ubuntu.sh
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y g++-aarch64-linux-gnu libc6-dev-arm64-cross
+            ./bin/export_cross_compile_env.sh
+          echo "::endgroup::"
+          echo "::group::Install Rust"
+            bin/install_rust.sh
+            . "$HOME/.cargo/env"
+          echo "::endgroup::"
+          echo "::group::Environment"
+            bin/environment.sh
+          echo "::endgroup::"
+          echo "::group::Build"
+            ./bin/release/release.sh
+            cp -frp target/$CARGO_BUILD_TARGET/release/hurl ./target/release/
+            cp -frp target/$CARGO_BUILD_TARGET/release/hurlfmt ./target/release/
+          echo "::endgroup::"
+          echo "::group::Get version"
+            export VERSION=$(bin/release/get_version.sh)
+          echo "::endgroup::"
+          echo "::group::Create man"
+            bin/release/man.sh
+          echo "::endgroup::"
+          echo "::group::Create tarball"
+            bin/release/create_tarball.sh
+          echo "::endgroup::"
+    - name: Archive production artifacts
+      uses: actions/upload-artifact@v4.6.0
+      with:
+        name: release-generic-linux-aarch64-artifacts
         path: target/upload/*
 
   test-generic-linux-on-docker-ubuntu-x64:
@@ -60,46 +111,48 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
     - name: Retrieve release-generic-linux-x64-artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.8
       with:
         name: release-generic-linux-x64-artifacts
         path: target/upload
     - name: Install package and tests integ
       uses: addnab/docker-run-action@v3
       with:
-        image: ubuntu
+        image: ubuntu:22.04
         options: --volume ${{ github.workspace }}:/work --workdir /work --privileged
         run: |
           set -e
-          echo "::group::Install system prerequisites"
-            bin/install_prerequisites_docker_ubuntu.sh
+          echo "::group::Install Prerequisites"
+            bin/install_prerequisites_ubuntu.sh
           echo "::endgroup::"
-          echo "::group::Install python3 venv"
-            bin/install_python3_venv.sh
+          echo "::group::Install python 3.11"
+            bin/install_pythonx_for_ubuntu.sh 11
+            bin/activate_python3_venv.sh
             export PATH=/tmp/hurl-python3-venv/bin:$PATH
-            which python3
-            python3 --version
-            pip --version
+          echo "::endgroup::"
+          echo "::group::Install Rust"
+            bin/install_rust.sh
+            . "$HOME/.cargo/env"
           echo "::endgroup::"
           echo "::group::Environment"
             bin/environment.sh
           echo "::endgroup::"
           echo "::group::Install generic linux package"
             bin/release/install_generic_linux_package.sh
-          export PATH="/tmp/hurl-generic-linux:$PATH"
+            export PATH="/tmp/hurl-generic-linux/bin:$PATH"
           echo "::endgroup::"
-          echo "::group::Install tests prerequisites"
+          echo "::group::Install tests integ prerequisistes"
             bin/test/test_prerequisites.sh
           echo "::endgroup::"
           echo "::group::Tests"
             bin/test/test_integ.sh
           echo "::endgroup::"
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       if: ${{ always() }}
       with:
         name: test-generic-linux-package-docker-ubuntu-x64-artifacts
@@ -111,11 +164,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
     - name: Retrieve release-generic-linux-x64-artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.8
       with:
         name: release-generic-linux-x64-artifacts
         path: target/upload
@@ -127,10 +180,10 @@ jobs:
         run: |
           set -e
           echo "::group::Install system prerequisites"
-            bin/install_prerequisites_docker_ubuntu.sh
+            bin/install_prerequisites_debian.sh
           echo "::endgroup::"
-          echo "::group::Install python3 venv"
-            bin/install_python3_venv.sh
+          echo "::group::Activate python3 venv"
+            bin/activate_python3_venv.sh
             export PATH=/tmp/hurl-python3-venv/bin:$PATH
             which python3
             python3 --version
@@ -141,7 +194,7 @@ jobs:
           echo "::endgroup::"
           echo "::group::Install generic linux package"
             bin/release/install_generic_linux_package.sh
-          export PATH="/tmp/hurl-generic-linux:$PATH"
+          export PATH="/tmp/hurl-generic-linux/bin:$PATH"
           echo "::endgroup::"
           echo "::group::Install tests prerequisites"
             bin/test/test_prerequisites.sh
@@ -150,7 +203,7 @@ jobs:
             bin/test/test_integ.sh
           echo "::endgroup::"
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       if: ${{ always() }}
       with:
         name: test-generic-linux-package-docker-debian-x64-artifacts
@@ -162,11 +215,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
     - name: Retrieve release-generic-linux-x64-artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.8
       with:
         name: release-generic-linux-x64-artifacts
         path: target/upload
@@ -178,10 +231,10 @@ jobs:
         run: |
           set -e
           echo "::group::Install system prerequisites"
-            bin/install_prerequisites_docker_archlinux.sh
+            bin/install_prerequisites_archlinux.sh
           echo "::endgroup::"
-          echo "::group::Install python3 venv"
-            bin/install_python3_venv.sh
+          echo "::group::Activate python3 venv"
+            bin/activate_python3_venv.sh
             export PATH=/tmp/hurl-python3-venv/bin:$PATH
             which python3
             python3 --version
@@ -192,7 +245,7 @@ jobs:
           echo "::endgroup::"
           echo "::group::Install generic linux package"
             bin/release/install_generic_linux_package.sh
-          export PATH="/tmp/hurl-generic-linux:$PATH"
+          export PATH="/tmp/hurl-generic-linux/bin:$PATH"
           echo "::endgroup::"
           echo "::group::Install tests prerequisites"
             bin/test/test_prerequisites.sh
@@ -201,7 +254,7 @@ jobs:
             bin/test/test_integ.sh
           echo "::endgroup::"
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       if: ${{ always() }}
       with:
         name: test-generic-linux-package-docker-archlinux-x64-artifacts
@@ -213,11 +266,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
     - name: Retrieve release-generic-linux-x64-artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.8
       with:
         name: release-generic-linux-x64-artifacts
         path: target/upload
@@ -228,11 +281,14 @@ jobs:
         options: --volume ${{ github.workspace }}:/work --workdir /work --privileged
         run: |
           set -e
-          echo "::group::Install system prerequisites"
-            bin/install_prerequisites_docker_fedora.sh
+          echo "::group::Disable PAM for sudo with root and no tty"
+            bin/disable_pam_for_sudo.sh
           echo "::endgroup::"
-          echo "::group::Install python3 venv"
-            bin/install_python3_venv.sh
+          echo "::group::Install system prerequisites"
+            bin/install_prerequisites_fedora.sh
+          echo "::endgroup::"
+          echo "::group::Activate python3 venv"
+            bin/activate_python3_venv.sh
             export PATH=/tmp/hurl-python3-venv/bin:$PATH
             which python3
             python3 --version
@@ -243,7 +299,7 @@ jobs:
           echo "::endgroup::"
           echo "::group::Install generic linux package"
             bin/release/install_generic_linux_package.sh
-          export PATH="/tmp/hurl-generic-linux:$PATH"
+          export PATH="/tmp/hurl-generic-linux/bin:$PATH"
           echo "::group::Install tests prerequisites"
           echo "::endgroup::"
             bin/test/test_prerequisites.sh
@@ -252,96 +308,22 @@ jobs:
             bin/test/test_integ.sh
           echo "::endgroup::"
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       if: ${{ always() }}
       with:
         name: test-generic-linux-package-docker-fedora-x64-artifacts
         path: |
           ./**/*.log
 
-#  test-docker-arm64-packages:
-#   runs-on: ubuntu-latest
-#   steps:
-#   - name: Checkout repository
-#     uses: actions/checkout@v4
-#     with:
-#       ref: ${{ inputs.branch }}
-#   - name: Set up Docker Buildx
-#     uses: docker/setup-buildx-action@v2
-#   - name: Build docker images
-#     run: |
-#         echo "::group::Docker build prerequisites"
-#           sudo apt-get install -y qemu-user-static
-#           sudo apt-get install -y binfmt-support
-#           sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-#           sudo docker buildx create --name mybuilder
-#           sudo docker buildx use mybuilder
-#           sudo docker buildx inspect --bootstrap
-#           sudo docker buildx ls
-#         echo "::endgroup::"
-#         echo "::group::Build docker hurl"
-#           docker_build_date=$(date "+%Y-%m-%d %H-%M-%S")
-#           docker_build_tag=$(grep ^version packages/hurl/Cargo.toml | cut --delimiter '=' --field 2 | tr -d '" ')
-#           sudo docker buildx build \
-#             --progress=plain \
-#             --file contrib/docker/Dockerfile \
-#             --platform linux/arm64 \
-#             --build-arg docker_build_date="${docker_build_date}" \
-#             --build-arg docker_build_tag="${docker_build_tag}" \
-#             --tag local/hurl:arm64 \
-#             --load .
-#           sudo docker inspect local/hurl:arm64
-#           sudo docker run --rm local/hurl:arm64 --version
-#         echo "::endgroup::"
-#   - name: Integration tests
-#     uses: addnab/docker-run-action@v3
-#     with:
-#       image: local/hurl:arm64
-#       options: --volume ${{ github.workspace }}:/work --workdir /work --privileged --env CARGO_TERM_COLOR=always --entrypoint sh --platform=linux/arm64
-#       run: |
-#         echo "::group::Install system prerequisites"
-#           set -e
-#           cat /etc/os-release
-#           apk add sudo bash curl python3 py3-pip
-#         echo "::endgroup::"
-#         echo "::group::Install alpine prerequisites"
-#           bash bin/install_prerequisites_alpine.sh
-#         echo "::endgroup::"
-#         echo "::group::Install tests prerequisites"
-#           bash bin/install_python3_venv.sh
-#           export PATH=/tmp/hurl-python3-venv/bin:$PATH
-#           which python3
-#           python3 --version
-#           pip --version
-#           bash bin/test/test_prerequisites.sh
-#         echo "::endgroup::"
-#         echo "::group::Environment"
-#           bash bin/environment.sh
-#         echo "::endgroup::"
-#         echo "::group::Integration tests"
-#           bash bin/test/test_integ.sh
-#         echo "::endgroup::"
-#   - name: find artifacts
-#     run: |
-#       pwd
-#       find . -name "*.log"
-#   - name: Archive production artifacts
-#     uses: actions/upload-artifact@v3
-#     if: ${{ always() }}
-#     with:
-#       name: test-docker-arm64-package-artifacts
-#       path: |
-#         ./**/*.log
-
-  test-docker-x64-packages:
+  test-dockerfile-x64:
    runs-on: ubuntu-latest
    steps:
    - name: Checkout repository
-     uses: actions/checkout@v4
+     uses: actions/checkout@v4.2.2
      with:
        ref: ${{ inputs.branch }}
    - name: Set up Docker Buildx
-     uses: docker/setup-buildx-action@v2
+     uses: docker/setup-buildx-action@v3.8.0
    - name: Build docker images
      run: |
          echo "::group::Docker build prerequisites"
@@ -379,7 +361,7 @@ jobs:
            bash bin/install_prerequisites_alpine.sh
          echo "::endgroup::"
          echo "::group::Install tests prerequisites"
-           bash bin/install_python3_venv.sh
+           bash bin/activate_python3_venv.sh
            export PATH=/tmp/hurl-python3-venv/bin:$PATH
            which python3
            python3 --version
@@ -397,7 +379,7 @@ jobs:
        pwd
        find . -name "*.log"
    - name: Archive production artifacts
-     uses: actions/upload-artifact@v3
+     uses: actions/upload-artifact@v4.6.0
      if: ${{ always() }}
      with:
        name: test-docker-amd64-package-artifacts
@@ -408,19 +390,20 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
-    - name: Install Python 3.10
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
     - name: Install Prerequisites
       run: bin/install_prerequisites_ubuntu.sh
-    - name: Install python3 venv
+    - name: Install Python 3.11
+      uses: actions/setup-python@v5.3.0
+      with:
+        python-version: '3.11'
+    - name: Activate python3 venv
       run: |
-        bin/install_python3_venv.sh
-        export PATH=/tmp/hurl-python3-venv/bin:$PATH
+        bin/activate_python3_venv.sh
+        export PATH="/tmp/hurl-python3-venv/bin:$PATH"
+        echo "PATH=$PATH" >> $GITHUB_ENV
         which python3
         python3 --version
         pip --version
@@ -449,24 +432,27 @@ jobs:
         bin/test/test_prerequisites.sh
         bin/test/test_integ.sh
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       with:
         name: release-deb-x64-artifacts
         path: target/upload/*
 
   package-macos-x64:
-    runs-on: macos-latest
+    runs-on: macos-13
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
     - name: Install Prerequisites
-      run: bin/install_prerequisites_macos.sh
-    - name: Install python3 venv
       run: |
-        bin/install_python3_venv.sh
-        export PATH=/tmp/hurl-python3-venv/bin:$PATH
+        bin/install_prerequisites_macos.sh
+        echo "PATH=$PATH" >> $GITHUB_ENV
+    - name: Activate python3 venv
+      run: |
+        bin/activate_python3_venv.sh
+        export PATH="/tmp/hurl-python3-venv/bin:$PATH"
+        echo "PATH=$PATH" >> $GITHUB_ENV
         which python3
         python3 --version
         pip --version
@@ -477,7 +463,7 @@ jobs:
     - name: Build
       run: |
         bin/release/release.sh
-        echo "PATH=:${PWD}/target/release:$PATH" >> "${GITHUB_ENV}"
+        echo "PATH=${PWD}/target/release:$PATH" >> "${GITHUB_ENV}"
     - name: Get version
       run: |
         VERSION=$(bin/release/get_version.sh)
@@ -489,15 +475,64 @@ jobs:
     - name: Install package
       run: |
         bin/release/install_generic_macos_package.sh
-        echo "PATH=/tmp/hurl-generic-macos:$PATH" >> "${GITHUB_ENV}"
+        echo "PATH=/tmp/hurl-generic-macos/bin:$PATH" >> "${GITHUB_ENV}"
     - name: Test integ
       run: |
         bin/test/test_prerequisites.sh
         bin/test/test_integ.sh
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       with:
         name: release-macos-x64-artifacts
+        path: target/upload/*
+
+  package-macos-aarch64:
+    runs-on: macos-14
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4.2.2
+      with:
+        ref: ${{ inputs.branch }}
+    - name: Install Prerequisites
+      run: |
+        bin/install_prerequisites_macos.sh
+        echo "PATH=$PATH" >> $GITHUB_ENV
+    - name: Activate python3 venv
+      run: |
+        bin/activate_python3_venv.sh
+        export PATH="/tmp/hurl-python3-venv/bin:$PATH"
+        echo "PATH=$PATH" >> $GITHUB_ENV
+        which python3
+        python3 --version
+        pip --version
+    - name: Install Rust
+      run: bin/install_rust.sh
+    - name: Environment
+      run: bin/environment.sh
+    - name: Build
+      run: |
+        bin/release/release.sh
+        echo "PATH=${PWD}/target/release:$PATH" >> "${GITHUB_ENV}"
+    - name: Get version
+      run: |
+        VERSION=$(bin/release/get_version.sh)
+        echo "VERSION=${VERSION}" | tee -a "${GITHUB_ENV}"
+    - name: Create generic macos package
+      run: |
+        bin/release/man.sh
+        bin/release/create_tarball.sh
+    - name: Install package
+      run: |
+        bin/release/install_generic_macos_package.sh
+        echo "PATH=/tmp/hurl-generic-macos/bin:$PATH" >> "${GITHUB_ENV}"
+    - name: Test integ
+      run: |
+        bin/test/test_prerequisites.sh
+        bin/test/test_integ.sh
+    - name: Archive production artifacts
+      uses: actions/upload-artifact@v4.6.0
+      with:
+        name: release-macos-aarch64-artifacts
         path: target/upload/*
 
   package-windows-x64:
@@ -510,32 +545,35 @@ jobs:
         git config --global core.autocrlf false
         git config --global core.eol lf
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4.2.2
       with:
         ref: ${{ inputs.branch }}
+    - name: Install Rust
+      run: |
+        .\bin\install_rust.ps1
     - name: Manage vcpkg cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4.2.0
       with:
         path: C:\vcpkg
         key: ${{ runner.os }}-release-windows-x64
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-        profile: minimal
-    - name: Environment
-      run: .\bin\environment.ps1
     - name: Install prerequisites
       run: .\bin\install_prerequisites_windows.ps1
-    - name: Build
+    - name: Install Python 3.11
+      uses: actions/setup-python@v5.3.0
+      with:
+        python-version: '3.11'
+    - name: Environment
       run: |
-        .\bin\release\release.ps1
+        .\bin\activate_python3_venv.ps1
+        .\bin\environment.ps1
+    - name: Build
+      run: .\bin\release\release.ps1
     - name: Create windows64 Zip package
       run: .\bin\release\create_windows64_zip_package.ps1
     - name: Install win64 zip and test integ
       run: |
         .\bin\release\install_windows64_zip_package.ps1
+        .\bin\activate_python3_venv.ps1
         .\bin\test\test_prerequisites.ps1
         .\bin\test\test_integ.ps1
     - name: Create windows64 installer
@@ -543,12 +581,56 @@ jobs:
     - name: Install win64 installer and test integ
       run: |
         .\bin\release\install_windows64_installer.ps1
+        .\bin\activate_python3_venv.ps1
         .\bin\test\test_prerequisites.ps1
         .\bin\test\test_integ.ps1
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.0
       with:
         name: release-windows-x64-artifacts
         path: |
           .\target\win-package\hurl-*-installer.exe
           .\target\win-package\hurl-*.zip
+
+  package-anatomy:
+    needs:
+      - package-generic-linux-x64
+      - package-generic-linux-aarch64
+      - package-deb-x64
+      - package-macos-x64
+      - package-macos-aarch64
+      - package-windows-x64
+    name: package-anatomy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ inputs.branch }}
+      - uses: actions/download-artifact@v4.1.8
+        with:
+          path: artifacts
+      - name: Prerequisites
+        if: ${{ always() }}
+        run: sudo apt-get install -y -qq --silent icdiff >/dev/null
+      - name: Package generic linux x64 anatomy
+        if: ${{ always() }}
+        run: bin/release/package-anatomy.sh artifacts/release-generic-linux-x64-artifacts/hurl-*-x86_64-unknown-linux-gnu.tar.gz --compare-with-dir docs/spec/packages
+      - name: Package generic linux aarch64 anatomy
+        if: ${{ always() }}
+        run: bin/release/package-anatomy.sh artifacts/release-generic-linux-aarch64-artifacts/hurl-*-aarch64-unknown-linux-gnu.tar.gz --compare-with-dir docs/spec/packages
+      - name: Package deb x64 anatomy
+        if: ${{ always() }}
+        run: bin/release/package-anatomy.sh artifacts/release-deb-x64-artifacts/hurl_*_amd64.deb --compare-with-dir docs/spec/packages
+      - name: Package macos x64 anatomy
+        if: ${{ always() }}
+        run: bin/release/package-anatomy.sh artifacts/release-macos-x64-artifacts/hurl-*-x86_64-apple-darwin.tar.gz --compare-with-dir docs/spec/packages
+      - name: Package macos aarch64 anatomy
+        if: ${{ always() }}
+        run: bin/release/package-anatomy.sh artifacts/release-macos-aarch64-artifacts/hurl-*-aarch64-apple-darwin.tar.gz --compare-with-dir docs/spec/packages
+      - name: Package windows x64 installer anatomy
+        if: ${{ always() }}
+        run: bin/release/package-anatomy.sh artifacts/release-windows-x64-artifacts/hurl-*-x86_64-pc-windows-msvc-installer.exe --compare-with-dir docs/spec/packages
+      - name: Package windows x64 zip anatomy
+        if: ${{ always() }}
+        run: bin/release/package-anatomy.sh artifacts/release-windows-x64-artifacts/hurl-*-x86_64-pc-windows-msvc.zip --compare-with-dir docs/spec/packages

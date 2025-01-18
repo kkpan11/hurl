@@ -14,7 +14,6 @@ in the following entries.
 
 ```hurl
 GET https://example.org
-
 HTTP 200
 Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
 [Asserts]
@@ -78,8 +77,7 @@ xpath "//li" count == 18
 
 ## Capture and Assertion
 
-With the response section, one can optionally [capture value from headers, body],
-or [add assert on status code, body or headers].
+With the response section, one can optionally [capture value from headers, body], or [add assert on status code, body or headers].
 
 ### Body compression
 
@@ -92,7 +90,9 @@ header by example) and add assert and captures on the decoded body as if there w
 
 ## Timings
 
-HTTP response timings are exposed through Hurl structured output (see [`--json`]) and HTML report (see [`--report-html`]).
+HTTP response timings are exposed through Hurl structured output (see [`--json`]), HTML report (see [`--report-html`])
+and JSON report (see [`--report-json`]).
+
 On each response, libcurl response timings are available:
 
 - __time_namelookup__: the time it took from the start until the name resolving was completed. You can use
@@ -108,8 +108,8 @@ On each response, libcurl response timings are available:
 All timings are in microsecond.
 
 <div class="picture">
-    <img class="light-img u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/timings-light.svg" alt="Response timings explanation"/>
-    <img class="dark-img u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/timings-dark.svg" alt="Response timings explanation"/>
+    <img class="u-theme-light u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/timings-light.svg" alt="Response timings explanation"/>
+    <img class="u-theme-dark u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/timings-dark.svg" alt="Response timings explanation"/>
     <a href="https://blog.cloudflare.com/a-question-of-timing/"><small>Courtesy of CloudFlare</small></a>
 </div>
 
@@ -128,4 +128,5 @@ All timings are in microsecond.
 [`Accept-Encoding`]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Accept-Encoding
 [`--json`]: /docs/manual.md#json
 [`--report-html`]: /docs/manual.md#report-html
+[`--report-json`]: /docs/manual.md#report-json
 [`--resolve`]: /docs/manual.md#resolve

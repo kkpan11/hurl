@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ use std::iter::zip;
 
 use crate::http::Call;
 use crate::report::html::timeline::svg::Attribute::{
-    Fill, FontFamily, FontSize, Height, Href, TextDecoration, ViewBox, Width, X, Y,
+    Class, Fill, FontFamily, FontSize, Height, Href, TextDecoration, ViewBox, Width, X, Y,
 };
 use crate::report::html::timeline::svg::{Element, ElementKind};
 use crate::report::html::timeline::unit::{Pixel, Px};
@@ -28,10 +28,16 @@ use crate::report::html::timeline::util::{
 };
 use crate::report::html::timeline::{svg, CallContext, CallContextKind, CALL_HEIGHT};
 use crate::report::html::Testcase;
+use crate::util::redacted::Redact;
 
 impl Testcase {
     /// Returns a SVG view of `calls` list using contexts `call_ctxs`.
-    pub fn get_calls_svg(&self, calls: &[&Call], call_ctxs: &[CallContext]) -> String {
+    pub fn get_calls_svg(
+        &self,
+        calls: &[&Call],
+        call_ctxs: &[CallContext],
+        secrets: &[&str],
+    ) -> String {
         let margin_top = 50.px();
         let margin_bottom = 250.px();
 
@@ -45,7 +51,10 @@ impl Testcase {
         root.add_attr(Width(width.0.to_string()));
         root.add_attr(Height(height.0.to_string()));
 
-        // Add symbols for success and failure icons:
+        // Add styles, symbols for success and failure icons:
+        let elt = svg::new_style(include_str!("../resources/calls.css"));
+        root.add_child(elt);
+
         let symbol = new_success_icon("success");
         root.add_child(symbol);
         let symbol = new_failure_icon("failure");
@@ -55,6 +64,7 @@ impl Testcase {
 
         // Add a flat background.
         let mut elt = Element::new(ElementKind::Rect);
+        elt.add_attr(Class("calls-back".to_string()));
         elt.add_attr(X(0.0));
         elt.add_attr(Y(0.0));
         elt.add_attr(Width("100%".to_string()));
@@ -70,7 +80,7 @@ impl Testcase {
             root.add_child(elt);
 
             // Add calls info
-            let elt = new_calls(calls, call_ctxs, x, y);
+            let elt = new_calls(calls, call_ctxs, x, y, secrets);
             root.add_child(elt);
         }
 
@@ -87,8 +97,10 @@ fn new_calls(
     call_ctxs: &[CallContext],
     offset_x: Pixel,
     offset_y: Pixel,
+    secrets: &[&str],
 ) -> Element {
     let mut group = svg::new_group();
+    group.add_attr(Class("calls-list".to_string()));
     group.add_attr(FontSize("13px".to_string()));
     group.add_attr(FontFamily("sans-serif".to_string()));
     group.add_attr(Fill("#777".to_string()));
@@ -118,7 +130,7 @@ fn new_calls(
             x += 12.px();
 
             // URL
-            let url = &call.request.url;
+            let url = &call.request.url.redact(secrets);
             let url = url.strip_prefix("http://").unwrap_or(url);
             let url = url.strip_prefix("https://").unwrap_or(url);
             let text = format!("{} {url}", call.request.method);
@@ -158,6 +170,7 @@ fn new_calls(
 /// Returns a SVG view of the grid calls.
 fn new_grid(calls: &[&Call], offset_y: Pixel, width: Pixel, height: Pixel) -> Element {
     let mut group = svg::new_group();
+    group.add_attr(Class("calls-grid".to_string()));
     let nb_lines = 2 * (calls.len() / 2) + 2;
     (0..nb_lines).for_each(|index| {
         let y = CALL_HEIGHT * index + offset_y - (index % 2).px();

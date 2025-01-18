@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,20 +15,13 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
-use hurl_core::ast::*;
+use hurl_core::ast::{Base64, Body, Bytes, Hex, Response, SourceInfo, StatusValue};
 
 use crate::http;
-use crate::runner::assert::eval_assert;
-use crate::runner::body::eval_body;
-use crate::runner::capture::eval_capture;
-use crate::runner::error::{Error, RunnerError};
-use crate::runner::json::eval_json_value;
-use crate::runner::multiline::eval_multiline;
+use crate::runner::cache::BodyCache;
+use crate::runner::error::{RunnerError, RunnerErrorKind};
 use crate::runner::result::{AssertResult, CaptureResult};
-use crate::runner::template::eval_template;
-use crate::runner::Value;
+use crate::runner::{assert, body, capture, json, multiline, template, Value, VariableSet};
 use crate::util::path::ContextDir;
 
 /// Returns a list of assert results on the response status code and HTTP version,
@@ -61,16 +54,21 @@ pub fn eval_version_status_asserts(
 ///
 /// Asserts on status and version and not run in this function, there are run with `eval_version_status_asserts`
 /// as they're semantically stronger.
+///
+/// The `cache` is used to store XML / JSON structured response data and avoid redundant parsing
+/// operation on the response.
 pub fn eval_asserts(
     response: &Response,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     http_response: &http::Response,
+    cache: &mut BodyCache,
     context_dir: &ContextDir,
 ) -> Vec<AssertResult> {
     let mut asserts = vec![];
 
-    for header in response.headers.iter() {
-        match eval_template(&header.value, variables) {
+    // First, evaluates implicit asserts on response headers.
+    for header in &response.headers {
+        match template::eval_template(&header.value, variables) {
             Err(e) => {
                 let result = AssertResult::Header {
                     actual: Err(e),
@@ -80,14 +78,14 @@ pub fn eval_asserts(
                 asserts.push(result);
             }
             Ok(expected) => {
-                match eval_template(&header.key, variables) {
+                match template::eval_template(&header.key, variables) {
                     Ok(header_name) => {
-                        let actuals = http_response.get_header_values(&header_name);
+                        let actuals = http_response.headers.values(&header_name);
                         if actuals.is_empty() {
                             let result = AssertResult::Header {
-                                actual: Err(Error::new(
+                                actual: Err(RunnerError::new(
                                     header.key.source_info,
-                                    RunnerError::QueryHeaderNotFound,
+                                    RunnerErrorKind::QueryHeaderNotFound,
                                     false,
                                 )),
                                 expected,
@@ -111,12 +109,12 @@ pub fn eval_asserts(
                                 actuals
                                     .iter()
                                     .map(|v| format!("\"{v}\""))
-                                    .collect::<Vec<String>>()
+                                    .collect::<Vec<_>>()
                                     .join(", ")
                             );
                             for value in actuals {
                                 if value == expected {
-                                    actual = value;
+                                    actual = value.to_string();
                                     break;
                                 }
                             }
@@ -141,13 +139,16 @@ pub fn eval_asserts(
         }
     }
 
+    // Second, evaluates implicit asserts on response body.
     if let Some(body) = &response.body {
         let assert = eval_implicit_body_asserts(body, variables, http_response, context_dir);
         asserts.push(assert);
     }
 
-    for assert in response.asserts().iter() {
-        let assert_result = eval_assert(assert, variables, http_response);
+    // Then, checks all the explicit asserts.
+    for assert in response.asserts() {
+        let assert_result =
+            assert::eval_explicit_assert(assert, variables, http_response, cache, context_dir);
         asserts.push(assert_result);
     }
     asserts
@@ -156,13 +157,13 @@ pub fn eval_asserts(
 /// Check the body of an actual HTTP response against a spec body, given a set of variables.
 fn eval_implicit_body_asserts(
     spec_body: &Body,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     http_response: &http::Response,
     context_dir: &ContextDir,
 ) -> AssertResult {
     match &spec_body.value {
         Bytes::Json(value) => {
-            let expected = match eval_json_value(value, variables, true) {
+            let expected = match json::eval_json_value(value, variables, true) {
                 Ok(s) => Ok(Value::String(s)),
                 Err(e) => Err(e),
             };
@@ -173,7 +174,11 @@ fn eval_implicit_body_asserts(
                         start: spec_body.space0.source_info.end,
                         end: spec_body.space0.source_info.end,
                     };
-                    Err(Error::new(source_info, e.into(), true))
+                    Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::Http(e),
+                        true,
+                    ))
                 }
             };
             AssertResult::Body {
@@ -191,7 +196,11 @@ fn eval_implicit_body_asserts(
                         start: spec_body.space0.source_info.end,
                         end: spec_body.space0.source_info.end,
                     };
-                    Err(Error::new(source_info, e.into(), true))
+                    Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::Http(e),
+                        true,
+                    ))
                 }
             };
             AssertResult::Body {
@@ -201,7 +210,7 @@ fn eval_implicit_body_asserts(
             }
         }
         Bytes::OnelineString(value) => {
-            let expected = match eval_template(value, variables) {
+            let expected = match template::eval_template(value, variables) {
                 Ok(s) => Ok(Value::String(s)),
                 Err(e) => Err(e),
             };
@@ -212,7 +221,11 @@ fn eval_implicit_body_asserts(
                         start: spec_body.space0.source_info.end,
                         end: spec_body.space0.source_info.end,
                     };
-                    Err(Error::new(source_info, e.into(), true))
+                    Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::Http(e),
+                        true,
+                    ))
                 }
             };
             AssertResult::Body {
@@ -222,7 +235,7 @@ fn eval_implicit_body_asserts(
             }
         }
         Bytes::MultilineString(multi) => {
-            let expected = match eval_multiline(multi, variables) {
+            let expected = match multiline::eval_multiline(multi, variables) {
                 Ok(s) => Ok(Value::String(s)),
                 Err(e) => Err(e),
             };
@@ -233,7 +246,11 @@ fn eval_implicit_body_asserts(
                         start: spec_body.space0.source_info.end,
                         end: spec_body.space0.source_info.end,
                     };
-                    Err(Error::new(source_info, e.into(), true))
+                    Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::Http(e),
+                        true,
+                    ))
                 }
             };
             AssertResult::Body {
@@ -256,7 +273,11 @@ fn eval_implicit_body_asserts(
                         start: spec_body.space0.source_info.end,
                         end: spec_body.space0.source_info.end,
                     };
-                    Err(Error::new(source_info, e.into(), true))
+                    Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::Http(e),
+                        true,
+                    ))
                 }
             };
             AssertResult::Body {
@@ -282,7 +303,11 @@ fn eval_implicit_body_asserts(
                         start: spec_body.space0.source_info.end,
                         end: spec_body.space0.source_info.end,
                     };
-                    Err(Error::new(source_info, e.into(), true))
+                    Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::Http(e),
+                        true,
+                    ))
                 }
             };
             AssertResult::Body {
@@ -295,7 +320,7 @@ fn eval_implicit_body_asserts(
             }
         }
         Bytes::File { .. } => {
-            let expected = match eval_body(spec_body, variables, context_dir) {
+            let expected = match body::eval_body(spec_body, variables, context_dir) {
                 Ok(body) => Ok(Value::Bytes(body.bytes())),
                 Err(e) => Err(e),
             };
@@ -306,7 +331,11 @@ fn eval_implicit_body_asserts(
                         start: spec_body.space0.source_info.end,
                         end: spec_body.space0.source_info.end,
                     };
-                    Err(Error::new(source_info, e.into(), true))
+                    Err(RunnerError::new(
+                        source_info,
+                        RunnerErrorKind::Http(e),
+                        true,
+                    ))
                 }
             };
             AssertResult::Body {
@@ -322,14 +351,20 @@ fn eval_implicit_body_asserts(
 pub fn eval_captures(
     response: &Response,
     http_response: &http::Response,
-    variables: &mut HashMap<String, Value>,
-) -> Result<Vec<CaptureResult>, Error> {
+    cache: &mut BodyCache,
+    variables: &mut VariableSet,
+) -> Result<Vec<CaptureResult>, RunnerError> {
     let mut captures = vec![];
-    for capture in response.captures().iter() {
-        let capture_result = eval_capture(capture, variables, http_response)?;
+    for capture in response.captures() {
+        let capture_result = capture::eval_capture(capture, variables, http_response, cache)?;
         // Update variables now so the captures set is ready in case
         // the next captures reference this new variable.
-        variables.insert(capture_result.name.clone(), capture_result.value.clone());
+        let name = capture_result.name.clone();
+        let value = capture_result.value.clone();
+        if let Err(error) = variables.insert(name, value) {
+            let source_info = capture.name.source_info;
+            return Err(error.to_runner_error(source_info));
+        }
         captures.push(capture_result);
     }
     Ok(captures)
@@ -337,6 +372,11 @@ pub fn eval_captures(
 
 #[cfg(test)]
 mod tests {
+    use hurl_core::ast::{
+        LineTerminator, Section, SectionValue, Status, Version, VersionValue, Whitespace,
+    };
+    use hurl_core::reader::Pos;
+
     use self::super::super::{assert, capture};
     use super::*;
     use crate::runner::Number;
@@ -389,23 +429,26 @@ mod tests {
 
     #[test]
     pub fn test_eval_asserts() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         let context_dir = ContextDir::default();
         assert_eq!(
             eval_asserts(
                 &user_response(),
                 &variables,
                 &http::xml_two_users_http_response(),
+                &mut cache,
                 &context_dir,
             ),
             vec![AssertResult::Explicit {
                 actual: Ok(Some(Value::Number(Number::Integer(2)))),
                 source_info: SourceInfo::new(Pos::new(1, 22), Pos::new(1, 24)),
-                predicate_result: Some(Err(Error::new(
+                predicate_result: Some(Err(RunnerError::new(
                     SourceInfo::new(Pos::new(1, 0), Pos::new(1, 0)),
-                    RunnerError::AssertFailure {
-                        actual: "int <2>".to_string(),
-                        expected: "int <3>".to_string(),
+                    RunnerErrorKind::AssertFailure {
+                        actual: "integer <2>".to_string(),
+                        expected: "integer <3>".to_string(),
                         type_mismatch: false,
                     },
                     true
@@ -435,11 +478,14 @@ mod tests {
 
     #[test]
     pub fn test_eval_captures() {
-        let mut variables = HashMap::new();
+        let mut variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         assert_eq!(
             eval_captures(
                 &user_response(),
                 &http::xml_two_users_http_response(),
+                &mut cache,
                 &mut variables,
             )
             .unwrap(),

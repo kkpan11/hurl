@@ -1,6 +1,7 @@
-from app import app
-from flask import make_response, request
 from io import BytesIO
+
+from app import app
+from flask import make_response
 
 
 @app.route("/error-assert-bytearray")

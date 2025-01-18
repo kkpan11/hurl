@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,49 +15,46 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
 use hurl_core::ast::{SourceInfo, Template};
 
 use crate::runner::template::eval_template;
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value, VariableSet};
 
+/// Splits the string `value` to a list of strings around occurrences of the specified `delimiter`.
 pub fn eval_split(
     value: &Value,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     source_info: SourceInfo,
     assert: bool,
-    sep: &Template,
-) -> Result<Option<Value>, Error> {
+    delimiter: &Template,
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::String(s) => {
-            let sep = eval_template(sep, variables)?;
+            let delimiter = eval_template(delimiter, variables)?;
             let values = s
-                .split(&sep)
+                .split(&delimiter)
                 .map(|v| Value::String(v.to_string()))
                 .collect();
             Ok(Some(Value::List(values)))
         }
         v => {
-            let inner = RunnerError::FilterInvalidInput(v.display());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.repr());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo, Template, TemplateElement, Whitespace};
+    use hurl_core::reader::Pos;
 
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::Value;
-    use hurl_core::ast::{
-        Filter, FilterValue, Pos, SourceInfo, Template, TemplateElement, Whitespace,
-    };
-    use std::collections::HashMap;
+    use crate::runner::{Value, VariableSet};
 
     #[test]
-    pub fn eval_filter_split() {
-        let variables = HashMap::new();
+    fn eval_filter_split() {
+        let variables = VariableSet::new();
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
             value: FilterValue::Split {

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,17 +15,17 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-use std::time::Duration;
-
 use hurl_core::ast::{
-    BooleanOption, Entry, EntryOption, Float, NaturalOption, OptionKind, Retry, RetryOption,
-    SectionValue, VariableDefinition, VariableValue,
+    BooleanOption, CountOption, DurationOption, Entry, EntryOption, Float, NaturalOption,
+    Number as AstNumber, OptionKind, Placeholder, SectionValue, VariableDefinition, VariableValue,
 };
+use hurl_core::typing::{BytesPerSec, Count, DurationUnit};
 
 use crate::http::{IpResolve, RequestedHttpVersion};
-use crate::runner::template::{eval_expression, eval_template};
-use crate::runner::{template, Error, Number, RunnerError, RunnerOptions, Value};
+use crate::runner::template::eval_template;
+use crate::runner::{
+    expr, Number, Output, RunnerError, RunnerErrorKind, RunnerOptions, Value, VariableSet,
+};
 use crate::util::logger::{Logger, Verbosity};
 
 /// Returns a new [`RunnerOptions`] based on the `entry` optional Options section
@@ -34,12 +34,19 @@ use crate::util::logger::{Logger, Verbosity};
 pub fn get_entry_options(
     entry: &Entry,
     runner_options: &RunnerOptions,
-    variables: &mut HashMap<String, Value>,
-    logger: &Logger,
-) -> Result<RunnerOptions, Error> {
-    let mut runner_options = runner_options.clone();
+    variables: &mut VariableSet,
+    logger: &mut Logger,
+) -> Result<RunnerOptions, RunnerError> {
+    let runner_options = runner_options.clone();
+    // When used globally (on the command line), `--output` writes the last successful request
+    // to `output` file. We don't want to output every entry's response, so we initialise
+    // output to `None`.
+    let mut entry_options = RunnerOptions {
+        output: None,
+        ..runner_options
+    };
     if !has_options(entry) {
-        return Ok(runner_options);
+        return Ok(entry_options);
     }
 
     logger.debug("");
@@ -51,28 +58,41 @@ pub fn get_entry_options(
                 match &option.kind {
                     OptionKind::AwsSigV4(value) => {
                         let value = eval_template(value, variables)?;
-                        runner_options.aws_sigv4 = Some(value)
+                        entry_options.aws_sigv4 = Some(value);
                     }
                     OptionKind::CaCertificate(filename) => {
-                        runner_options.cacert_file = Some(filename.value.clone())
+                        let value = eval_template(filename, variables)?;
+                        entry_options.cacert_file = Some(value);
                     }
                     OptionKind::ClientCert(filename) => {
-                        runner_options.client_cert_file = Some(filename.value.clone())
+                        let value = eval_template(filename, variables)?;
+                        entry_options.client_cert_file = Some(value);
                     }
                     OptionKind::ClientKey(filename) => {
-                        runner_options.client_key_file = Some(filename.value.clone())
+                        let value = eval_template(filename, variables)?;
+                        entry_options.client_key_file = Some(value);
                     }
                     OptionKind::Compressed(value) => {
                         let value = eval_boolean_option(value, variables)?;
-                        runner_options.compressed = value
+                        entry_options.compressed = value;
                     }
                     OptionKind::ConnectTo(value) => {
                         let value = eval_template(value, variables)?;
-                        runner_options.connects_to.push(value)
+                        entry_options.connects_to.push(value);
+                    }
+                    OptionKind::ConnectTimeout(value) => {
+                        let value =
+                            eval_duration_option(value, variables, DurationUnit::MilliSecond)?;
+                        entry_options.connect_timeout = value;
                     }
                     OptionKind::Delay(value) => {
-                        let value = eval_natural_option(value, variables)?;
-                        runner_options.delay = Duration::from_millis(value)
+                        let value =
+                            eval_duration_option(value, variables, DurationUnit::MilliSecond)?;
+                        entry_options.delay = value;
+                    }
+                    OptionKind::Header(value) => {
+                        let value = eval_template(value, variables)?;
+                        entry_options.headers.push(value);
                     }
                     // HTTP version options (such as http1.0, http1.1, http2 etc...) are activated
                     // through a flag. In an `[Options]` section, the signification of such a flag is:
@@ -101,44 +121,51 @@ pub fn get_entry_options(
                     OptionKind::Http10(value) => {
                         let value = eval_boolean_option(value, variables)?;
                         if value {
-                            runner_options.http_version = RequestedHttpVersion::Http10
+                            entry_options.http_version = RequestedHttpVersion::Http10;
                         }
                     }
                     OptionKind::Http11(value) => {
                         let value = eval_boolean_option(value, variables)?;
                         if value {
-                            runner_options.http_version = RequestedHttpVersion::Http11
+                            entry_options.http_version = RequestedHttpVersion::Http11;
                         } else {
-                            runner_options.http_version = RequestedHttpVersion::Http10
+                            entry_options.http_version = RequestedHttpVersion::Http10;
                         }
                     }
                     OptionKind::Http2(value) => {
                         let value = eval_boolean_option(value, variables)?;
                         if value {
-                            runner_options.http_version = RequestedHttpVersion::Http2
+                            entry_options.http_version = RequestedHttpVersion::Http2;
                         } else {
-                            runner_options.http_version = RequestedHttpVersion::Http11
+                            entry_options.http_version = RequestedHttpVersion::Http11;
                         }
                     }
                     OptionKind::Http3(value) => {
                         let value = eval_boolean_option(value, variables)?;
                         if value {
-                            runner_options.http_version = RequestedHttpVersion::Http3
+                            entry_options.http_version = RequestedHttpVersion::Http3;
                         } else {
-                            runner_options.http_version = RequestedHttpVersion::Http2
+                            entry_options.http_version = RequestedHttpVersion::Http2;
                         }
                     }
                     OptionKind::FollowLocation(value) => {
                         let value = eval_boolean_option(value, variables)?;
-                        runner_options.follow_location = value;
+                        entry_options.follow_location = value;
+                    }
+                    OptionKind::FollowLocationTrusted(value) => {
+                        let value = eval_boolean_option(value, variables)?;
+                        if value {
+                            entry_options.follow_location = true;
+                        }
+                        entry_options.follow_location_trusted = value;
                     }
                     OptionKind::Insecure(value) => {
                         let value = eval_boolean_option(value, variables)?;
-                        runner_options.insecure = value
+                        entry_options.insecure = value;
                     }
                     OptionKind::IpV4(value) => {
                         let value = eval_boolean_option(value, variables)?;
-                        runner_options.ip_resolve = if value {
+                        entry_options.ip_resolve = if value {
                             IpResolve::IpV4
                         } else {
                             IpResolve::IpV6
@@ -146,61 +173,105 @@ pub fn get_entry_options(
                     }
                     OptionKind::IpV6(value) => {
                         let value = eval_boolean_option(value, variables)?;
-                        runner_options.ip_resolve = if value {
+                        entry_options.ip_resolve = if value {
                             IpResolve::IpV6
                         } else {
                             IpResolve::IpV4
                         }
                     }
-                    OptionKind::MaxRedirect(value) => {
+                    OptionKind::LimitRate(value) => {
                         let value = eval_natural_option(value, variables)?;
-                        runner_options.max_redirect = Some(value as usize)
+                        entry_options.max_send_speed = Some(BytesPerSec(value));
+                        entry_options.max_recv_speed = Some(BytesPerSec(value));
                     }
-                    OptionKind::Output(filename) => {
-                        runner_options.output = Some(filename.value.clone())
+                    OptionKind::MaxRedirect(value) => {
+                        let value = eval_count_option(value, variables)?;
+                        entry_options.max_redirect = value;
+                    }
+                    OptionKind::NetRc(value) => {
+                        let value = eval_boolean_option(value, variables)?;
+                        entry_options.netrc = value;
+                    }
+                    OptionKind::NetRcFile(value) => {
+                        let filename = eval_template(value, variables)?;
+                        entry_options.netrc_file = Some(filename);
+                    }
+                    OptionKind::NetRcOptional(value) => {
+                        let value = eval_boolean_option(value, variables)?;
+                        entry_options.netrc_optional = value;
+                    }
+                    OptionKind::Output(output) => {
+                        let filename = eval_template(output, variables)?;
+                        let output = Output::new(&filename);
+                        entry_options.output = Some(output);
                     }
                     OptionKind::PathAsIs(value) => {
                         let value = eval_boolean_option(value, variables)?;
-                        runner_options.path_as_is = value
+                        entry_options.path_as_is = value;
                     }
                     OptionKind::Proxy(value) => {
                         let value = eval_template(value, variables)?;
-                        runner_options.proxy = Some(value.to_string())
+                        entry_options.proxy = Some(value);
+                    }
+                    OptionKind::Repeat(value) => {
+                        let value = eval_count_option(value, variables)?;
+                        entry_options.repeat = Some(value);
                     }
                     OptionKind::Resolve(value) => {
                         let value = eval_template(value, variables)?;
-                        runner_options.resolves.push(value)
+                        entry_options.resolves.push(value);
                     }
                     OptionKind::Retry(value) => {
-                        let value = eval_retry_option(value, variables)?;
-                        runner_options.retry = value
+                        let value = eval_count_option(value, variables)?;
+                        entry_options.retry = Some(value);
                     }
                     OptionKind::RetryInterval(value) => {
-                        let value = eval_natural_option(value, variables)?;
-                        runner_options.retry_interval = Duration::from_millis(value)
+                        let value =
+                            eval_duration_option(value, variables, DurationUnit::MilliSecond)?;
+                        entry_options.retry_interval = value;
                     }
                     OptionKind::Skip(value) => {
                         let value = eval_boolean_option(value, variables)?;
-                        runner_options.skip = value
+                        entry_options.skip = value;
                     }
-                    OptionKind::Variable(VariableDefinition { name, value, .. }) => {
+                    OptionKind::UnixSocket(value) => {
+                        let value = eval_template(value, variables)?;
+                        entry_options.unix_socket = Some(value);
+                    }
+                    OptionKind::User(value) => {
+                        let value = eval_template(value, variables)?;
+                        entry_options.user = Some(value);
+                    }
+                    OptionKind::Variable(VariableDefinition {
+                        source_info,
+                        name,
+                        value,
+                        ..
+                    }) => {
                         let value = eval_variable_value(value, variables)?;
-                        variables.insert(name.clone(), value);
+                        if let Err(err) = variables.insert(name.clone(), value) {
+                            return Err(err.to_runner_error(*source_info));
+                        }
                     }
-                    // verbose and very-verbose option have been previously processed as thy
-                    // can impact the logging.
-                    OptionKind::Verbose(_) => {}
-                    OptionKind::VeryVerbose(_) => {}
+                    // verbose and very-verbose option have been previously processed as they
+                    // can impact the logging. We compute here their values to check the potential
+                    // templatized error.
+                    OptionKind::Verbose(value) => {
+                        eval_boolean_option(value, variables)?;
+                    }
+                    OptionKind::VeryVerbose(value) => {
+                        eval_boolean_option(value, variables)?;
+                    }
                 }
                 log_option(option, logger);
             }
         }
     }
-    Ok(runner_options)
+    Ok(entry_options)
 }
 
 /// Logs an entry option.
-fn log_option(option: &EntryOption, logger: &Logger) {
+fn log_option(option: &EntryOption, logger: &mut Logger) {
     let name = option.kind.name();
     let value = option.kind.value_as_str();
     logger.debug(&format!("{name}: {value}"));
@@ -218,10 +289,10 @@ fn has_options(entry: &Entry) -> bool {
 /// Returns the overridden `entry` verbosity, or the default `verbosity` file.
 pub fn get_entry_verbosity(
     entry: &Entry,
-    verbosity: &Option<Verbosity>,
-    variables: &HashMap<String, Value>,
-) -> Result<Option<Verbosity>, Error> {
-    let mut verbosity = *verbosity;
+    default_verbosity: Option<Verbosity>,
+    variables: &VariableSet,
+) -> Result<Option<Verbosity>, RunnerError> {
+    let mut verbosity = default_verbosity;
 
     for section in &entry.request.sections {
         if let SectionValue::Options(options) = &section.value {
@@ -253,144 +324,201 @@ pub fn get_entry_verbosity(
 
 fn eval_boolean_option(
     boolean_value: &BooleanOption,
-    variables: &HashMap<String, Value>,
-) -> Result<bool, Error> {
+    variables: &VariableSet,
+) -> Result<bool, RunnerError> {
     match boolean_value {
         BooleanOption::Literal(value) => Ok(*value),
-        BooleanOption::Expression(expr) => match eval_expression(expr, variables)? {
-            Value::Bool(value) => Ok(value),
-            v => {
-                let inner = RunnerError::TemplateVariableInvalidType {
-                    name: expr.variable.name.clone(),
-                    value: v.to_string(),
-                    expecting: "boolean".to_string(),
-                };
-                Err(Error::new(expr.variable.source_info, inner, false))
+        BooleanOption::Placeholder(Placeholder { expr, .. }) => {
+            match expr::eval(expr, variables)? {
+                Value::Bool(value) => Ok(value),
+                v => {
+                    let kind = RunnerErrorKind::ExpressionInvalidType {
+                        value: v.repr(),
+                        expecting: "boolean".to_string(),
+                    };
+                    Err(RunnerError::new(expr.source_info, kind, false))
+                }
             }
-        },
+        }
     }
 }
 
 fn eval_natural_option(
     natural_value: &NaturalOption,
-    variables: &HashMap<String, Value>,
-) -> Result<u64, Error> {
+    variables: &VariableSet,
+) -> Result<u64, RunnerError> {
     match natural_value {
-        NaturalOption::Literal(value) => Ok(*value),
-        NaturalOption::Expression(expr) => match eval_expression(expr, variables)? {
-            Value::Number(Number::Integer(value)) => {
-                if value < 0 {
-                    let inner = RunnerError::TemplateVariableInvalidType {
-                        name: expr.variable.name.clone(),
-                        value: value.to_string(),
-                        expecting: "positive integer".to_string(),
+        NaturalOption::Literal(value) => Ok(value.as_u64()),
+        NaturalOption::Placeholder(Placeholder { expr, .. }) => {
+            match expr::eval(expr, variables)? {
+                Value::Number(Number::Integer(value)) => {
+                    if value > 0 {
+                        Ok(value as u64)
+                    } else {
+                        let kind = RunnerErrorKind::ExpressionInvalidType {
+                            value: format!("integer <{value}>"),
+                            expecting: "integer > 0".to_string(),
+                        };
+                        Err(RunnerError::new(expr.source_info, kind, false))
+                    }
+                }
+                v => {
+                    let kind = RunnerErrorKind::ExpressionInvalidType {
+                        value: v.repr(),
+                        expecting: "integer".to_string(),
                     };
-                    Err(Error::new(expr.variable.source_info, inner, false))
+                    Err(RunnerError::new(expr.source_info, kind, false))
+                }
+            }
+        }
+    }
+}
+
+fn eval_count_option(
+    count_value: &CountOption,
+    variables: &VariableSet,
+) -> Result<Count, RunnerError> {
+    match count_value {
+        CountOption::Literal(repeat) => Ok(*repeat),
+        CountOption::Placeholder(Placeholder { expr, .. }) => match expr::eval(expr, variables)? {
+            Value::Number(Number::Integer(value)) => {
+                if value == -1 {
+                    Ok(Count::Infinite)
+                } else if value >= 0 {
+                    Ok(Count::Finite(value as usize))
                 } else {
-                    Ok(value as u64)
+                    let kind = RunnerErrorKind::ExpressionInvalidType {
+                        value: format!("integer <{value}>"),
+                        expecting: "integer >= -1".to_string(),
+                    };
+                    Err(RunnerError::new(expr.source_info, kind, false))
                 }
             }
             v => {
-                let inner = RunnerError::TemplateVariableInvalidType {
-                    name: expr.variable.name.clone(),
-                    value: v.to_string(),
-                    expecting: "positive integer".to_string(),
+                let kind = RunnerErrorKind::ExpressionInvalidType {
+                    value: v.repr(),
+                    expecting: "integer".to_string(),
                 };
-                Err(Error::new(expr.variable.source_info, inner, false))
+                Err(RunnerError::new(expr.source_info, kind, false))
             }
         },
     }
 }
 
-fn eval_retry_option(
-    retry_option_value: &RetryOption,
-    variables: &HashMap<String, Value>,
-) -> Result<Retry, Error> {
-    match retry_option_value {
-        RetryOption::Literal(retry) => Ok(*retry),
-        RetryOption::Expression(expr) => match eval_expression(expr, variables)? {
+/// return duration value in milliseconds
+fn eval_duration_option(
+    duration_value: &DurationOption,
+    variables: &VariableSet,
+    default_unit: DurationUnit,
+) -> Result<std::time::Duration, RunnerError> {
+    let millis = match duration_value {
+        DurationOption::Literal(literal) => {
+            let unit = literal.unit.unwrap_or(default_unit);
+
+            match unit {
+                DurationUnit::MilliSecond => literal.value.as_u64(),
+                DurationUnit::Second => literal.value.as_u64() * 1000,
+                DurationUnit::Minute => literal.value.as_u64() * 1000 * 60,
+            }
+        }
+        DurationOption::Placeholder(Placeholder { expr, .. }) => match expr::eval(expr, variables)?
+        {
             Value::Number(Number::Integer(value)) => {
-                if value == -1 {
-                    Ok(Retry::Infinite)
-                } else if value == 0 {
-                    Ok(Retry::None)
-                } else if value > 0 {
-                    Ok(Retry::Finite(value as usize))
-                } else {
-                    let inner = RunnerError::TemplateVariableInvalidType {
-                        name: expr.variable.name.clone(),
-                        value: value.to_string(),
-                        expecting: "integer".to_string(),
+                if value < 0 {
+                    let kind = RunnerErrorKind::ExpressionInvalidType {
+                        value: format!("integer <{value}>"),
+                        expecting: "positive integer".to_string(),
                     };
-                    Err(Error::new(expr.variable.source_info, inner, false))
+                    return Err(RunnerError::new(expr.source_info, kind, false));
+                } else {
+                    match default_unit {
+                        DurationUnit::MilliSecond => value as u64,
+                        DurationUnit::Second => (value * 1000) as u64,
+                        DurationUnit::Minute => (value * 1000 * 60) as u64,
+                    }
                 }
             }
             v => {
-                let inner = RunnerError::TemplateVariableInvalidType {
-                    name: expr.variable.name.clone(),
-                    value: v.to_string(),
-                    expecting: "integer".to_string(),
+                let kind = RunnerErrorKind::ExpressionInvalidType {
+                    value: v.repr(),
+                    expecting: "positive integer".to_string(),
                 };
-                Err(Error::new(expr.variable.source_info, inner, false))
+                return Err(RunnerError::new(expr.source_info, kind, false));
             }
         },
-    }
+    };
+    Ok(std::time::Duration::from_millis(millis))
 }
 
 fn eval_variable_value(
     variable_value: &VariableValue,
-    variables: &mut HashMap<String, Value>,
-) -> Result<Value, Error> {
+    variables: &mut VariableSet,
+) -> Result<Value, RunnerError> {
     match variable_value {
         VariableValue::Null => Ok(Value::Null),
         VariableValue::Bool(v) => Ok(Value::Bool(*v)),
-        VariableValue::Integer(v) => Ok(Value::Number(Number::Integer(*v))),
-        VariableValue::Float(Float { value, .. }) => Ok(Value::Number(Number::Float(*value))),
+        VariableValue::Number(v) => Ok(eval_number(v)),
         VariableValue::String(template) => {
-            let s = template::eval_template(template, variables)?;
+            let s = eval_template(template, variables)?;
             Ok(Value::String(s))
         }
     }
 }
 
+fn eval_number(number: &AstNumber) -> Value {
+    match number {
+        AstNumber::Float(Float { value, .. }) => Value::Number(Number::Float(*value)),
+        AstNumber::Integer(value) => Value::Number(Number::Integer(value.as_i64())),
+        AstNumber::BigInteger(value) => Value::Number(Number::BigInteger(value.clone())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use hurl_core::ast::{Expr, Pos, SourceInfo, Variable, Whitespace};
+    use hurl_core::ast::{Expr, ExprKind, Placeholder, SourceInfo, Variable, Whitespace, U64};
+    use hurl_core::reader::Pos;
+    use hurl_core::typing::{Duration, DurationUnit};
 
     use super::*;
-    use crate::runner::RunnerError;
+    use crate::runner::RunnerErrorKind;
 
     fn verbose_option_template() -> BooleanOption {
         // {{verbose}}
-        BooleanOption::Expression(Expr {
+        BooleanOption::Placeholder(Placeholder {
             space0: Whitespace {
-                value: "".to_string(),
+                value: String::new(),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
-            variable: Variable {
-                name: "verbose".to_string(),
+            expr: Expr {
+                kind: ExprKind::Variable(Variable {
+                    name: "verbose".to_string(),
+                    source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
+                }),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
             space1: Whitespace {
-                value: "".to_string(),
+                value: String::new(),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
         })
     }
 
-    fn retry_option_template() -> NaturalOption {
+    fn retry_option_template() -> DurationOption {
         // {{retry}}
-        NaturalOption::Expression(Expr {
+        DurationOption::Placeholder(Placeholder {
             space0: Whitespace {
-                value: "".to_string(),
+                value: String::new(),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
-            variable: Variable {
-                name: "retry".to_string(),
+            expr: Expr {
+                kind: ExprKind::Variable(Variable {
+                    name: "retry".to_string(),
+                    source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
+                }),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
             space1: Whitespace {
-                value: "".to_string(),
+                value: String::new(),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
         })
@@ -398,36 +526,39 @@ mod tests {
 
     #[test]
     fn test_eval_boolean_option() {
-        let mut variables = HashMap::default();
+        let mut variables = VariableSet::default();
         assert!(eval_boolean_option(&BooleanOption::Literal(true), &variables).unwrap());
 
-        variables.insert("verbose".to_string(), Value::Bool(true));
+        variables
+            .insert("verbose".to_string(), Value::Bool(true))
+            .unwrap();
         assert!(eval_boolean_option(&verbose_option_template(), &variables).unwrap());
     }
 
     #[test]
     fn test_eval_boolean_option_error() {
-        let mut variables = HashMap::default();
+        let mut variables = VariableSet::default();
         let error = eval_boolean_option(&verbose_option_template(), &variables)
             .err()
             .unwrap();
         assert!(!error.assert);
         assert_eq!(
-            error.inner,
-            RunnerError::TemplateVariableNotDefined {
+            error.kind,
+            RunnerErrorKind::TemplateVariableNotDefined {
                 name: "verbose".to_string()
             }
         );
 
-        variables.insert("verbose".to_string(), Value::Number(Number::Integer(10)));
+        variables
+            .insert("verbose".to_string(), Value::Number(Number::Integer(10)))
+            .unwrap();
         let error = eval_boolean_option(&verbose_option_template(), &variables)
             .err()
             .unwrap();
         assert_eq!(
-            error.inner,
-            RunnerError::TemplateVariableInvalidType {
-                name: "verbose".to_string(),
-                value: "10".to_string(),
+            error.kind,
+            RunnerErrorKind::ExpressionInvalidType {
+                value: "integer <10>".to_string(),
                 expecting: "boolean".to_string()
             }
         );
@@ -435,16 +566,31 @@ mod tests {
 
     #[test]
     fn test_eval_natural_option() {
-        let mut variables = HashMap::default();
+        let mut variables = VariableSet::default();
         assert_eq!(
-            eval_natural_option(&NaturalOption::Literal(1), &variables).unwrap(),
-            1
+            eval_duration_option(
+                &DurationOption::Literal(Duration::new(
+                    U64::new(1, "1".to_string()),
+                    Some(DurationUnit::Second)
+                )),
+                &variables,
+                DurationUnit::MilliSecond
+            )
+            .unwrap(),
+            std::time::Duration::from_millis(1000)
         );
 
-        variables.insert("retry".to_string(), Value::Number(Number::Integer(10)));
+        variables
+            .insert("retry".to_string(), Value::Number(Number::Integer(10)))
+            .unwrap();
         assert_eq!(
-            eval_natural_option(&retry_option_template(), &variables).unwrap(),
-            10
+            eval_duration_option(
+                &retry_option_template(),
+                &variables,
+                DurationUnit::MilliSecond
+            )
+            .unwrap(),
+            std::time::Duration::from_millis(10)
         );
     }
 }

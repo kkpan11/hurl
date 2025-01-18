@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,6 +61,7 @@ impl Testcase {
         hurl_file: &HurlFile,
         content: &str,
         entries: &[EntryResult],
+        secrets: &[&str],
     ) -> String {
         let calls = entries
             .iter()
@@ -69,10 +70,10 @@ impl Testcase {
 
         let call_ctxs = self.get_call_contexts(hurl_file, entries);
         let timeline_css = include_str!("../resources/timeline.css");
-        let nav = self.get_nav_html(content, Tab::Timeline);
+        let nav = self.get_nav_html(content, Tab::Timeline, secrets);
         let nav_css = include_str!("../resources/nav.css");
-        let calls_svg = self.get_calls_svg(&calls, &call_ctxs);
-        let waterfall_svg = self.get_waterfall_svg(&calls, &call_ctxs);
+        let calls_svg = self.get_calls_svg(&calls, &call_ctxs, secrets);
+        let waterfall_svg = self.get_waterfall_svg(&calls, &call_ctxs, secrets);
         format!(
             include_str!("../resources/timeline.html"),
             calls = calls_svg,
@@ -102,7 +103,7 @@ impl Testcase {
             for (call_entry_index, _) in e.calls.iter().enumerate() {
                 let entry_src_index = e.entry_index - 1;
                 let entry_src = hurl_file.entries.get(entry_src_index).unwrap();
-                let line = entry_src.request.space0.source_info.start.line;
+                let line = entry_src.source_info().start.line;
                 let ctx = CallContext {
                     kind,
                     line,

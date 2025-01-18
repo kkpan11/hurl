@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,15 @@
  * limitations under the License.
  *
  */
+//! Access controlled path.
 use std::path::{Component, Path, PathBuf};
 
 /// Represents the directories used to run a Hurl file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextDir {
     /// The current working directory.
-    /// If current directory is a relative path, the `is_allowed` is not guaranteed to be correct.
+    /// If current directory is a relative path, the `is_access_allowed` method
+    /// is not guaranteed to be correct.
     current_dir: PathBuf,
     /// The file root, either inferred or explicitly positioned by the user.
     /// As a consequence, it is always defined (and can't be replaced by a `Option<PathBuf>`).
@@ -48,14 +50,15 @@ impl ContextDir {
     }
 
     /// Returns a path (absolute or relative), given a filename.
-    pub fn get_path(&self, filename: &str) -> PathBuf {
-        self.file_root.join(Path::new(filename))
+    pub fn resolved_path(&self, filename: &Path) -> PathBuf {
+        self.file_root.join(filename)
     }
 
-    /// Checks if a given filename access is authorized.
-    /// This method is used to check if a local file can be included in POST request.
-    pub fn is_access_allowed(&self, filename: &str) -> bool {
-        let file = self.get_path(filename);
+    /// Checks if a given `filename` access is authorized.
+    /// This method is used to check if a local file can be included in POST request or if a
+    /// response can be outputted to a given file when using `output` option in \[Options\] sections.
+    pub fn is_access_allowed(&self, filename: &Path) -> bool {
+        let file = self.resolved_path(filename);
         let absolute_file = self.current_dir.join(file);
         let absolute_file_root = self.current_dir.join(&self.file_root);
         is_descendant(absolute_file.as_path(), absolute_file_root.as_path())
@@ -118,18 +121,18 @@ mod tests {
         // ```
         let current_dir = Path::new("/tmp");
         let file_root = Path::new("");
-        let context_dir = ContextDir::new(current_dir, file_root);
-        assert!(context_dir.is_access_allowed("foo.bin"));
-        assert!(context_dir.is_access_allowed("/tmp/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/b/foo.bin"));
-        assert!(context_dir.is_access_allowed("../tmp/a/b/foo.bin"));
-        assert!(context_dir.is_access_allowed("../../../tmp/a/b/foo.bin"));
+        let ctx = ContextDir::new(current_dir, file_root);
+        assert!(ctx.is_access_allowed(Path::new("foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("/tmp/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/b/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("../tmp/a/b/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("../../../tmp/a/b/foo.bin")));
 
-        assert!(!context_dir.is_access_allowed("/file/foo.bin"));
-        assert!(!context_dir.is_access_allowed("../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../file/foo.bin"));
+        assert!(!ctx.is_access_allowed(Path::new("/file/foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../file/foo.bin")));
     }
 
     #[test]
@@ -140,33 +143,33 @@ mod tests {
         // ```
         let current_dir = Path::new("/tmp");
         let file_root = Path::new("/file");
-        let context_dir = ContextDir::new(current_dir, file_root);
-        assert!(context_dir.is_access_allowed("foo.bin")); // absolute path is /file/foo.bin
-        assert!(context_dir.is_access_allowed("/file/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/b/foo.bin"));
-        assert!(context_dir.is_access_allowed("../../file/foo.bin"));
+        let ctx = ContextDir::new(current_dir, file_root);
+        assert!(ctx.is_access_allowed(Path::new("foo.bin"))); // absolute path is /file/foo.bin
+        assert!(ctx.is_access_allowed(Path::new("/file/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/b/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("../../file/foo.bin")));
 
-        assert!(!context_dir.is_access_allowed("/tmp/foo.bin"));
-        assert!(!context_dir.is_access_allowed("../tmp/a/b/foo.bin"));
-        assert!(!context_dir.is_access_allowed("../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../../tmp/a/b/foo.bin"));
+        assert!(!ctx.is_access_allowed(Path::new("/tmp/foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../tmp/a/b/foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../../tmp/a/b/foo.bin")));
 
         let current_dir = Path::new("/tmp");
         let file_root = Path::new("../file");
-        let context_dir = ContextDir::new(current_dir, file_root);
-        assert!(context_dir.is_access_allowed("foo.bin"));
-        assert!(context_dir.is_access_allowed("/file/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/b/foo.bin"));
-        assert!(context_dir.is_access_allowed("../../file/foo.bin"));
+        let ctx = ContextDir::new(current_dir, file_root);
+        assert!(ctx.is_access_allowed(Path::new("foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("/file/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/b/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("../../file/foo.bin")));
 
-        assert!(!context_dir.is_access_allowed("/tmp/foo.bin"));
-        assert!(!context_dir.is_access_allowed("../tmp/a/b/foo.bin"));
-        assert!(!context_dir.is_access_allowed("../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../../tmp/a/b/foo.bin"));
+        assert!(!ctx.is_access_allowed(Path::new("/tmp/foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../tmp/a/b/foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../../tmp/a/b/foo.bin")));
     }
 
     #[test]
@@ -177,14 +180,14 @@ mod tests {
         // ```
         let current_dir = Path::new("/tmp");
         let file_root = Path::new("a/b");
-        let context_dir = ContextDir::new(current_dir, file_root);
-        assert!(context_dir.is_access_allowed("foo.bin"));
-        assert!(context_dir.is_access_allowed("c/foo.bin")); // absolute path is /tmp/a/b/c/foo.bin
-        assert!(context_dir.is_access_allowed("/tmp/a/b/foo.bin"));
-        assert!(context_dir.is_access_allowed("/tmp/a/b/c/d/foo.bin"));
-        assert!(context_dir.is_access_allowed("../../../tmp/a/b/foo.bin"));
+        let ctx = ContextDir::new(current_dir, file_root);
+        assert!(ctx.is_access_allowed(Path::new("foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("c/foo.bin"))); // absolute path is /tmp/a/b/c/foo.bin
+        assert!(ctx.is_access_allowed(Path::new("/tmp/a/b/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("/tmp/a/b/c/d/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("../../../tmp/a/b/foo.bin")));
 
-        assert!(!context_dir.is_access_allowed("/tmp/foo.bin"));
+        assert!(!ctx.is_access_allowed(Path::new("/tmp/foo.bin")));
     }
 
     #[test]
@@ -195,18 +198,18 @@ mod tests {
         // ```
         let current_dir = Path::new("/tmp");
         let file_root = Path::new("../tmp");
-        let context_dir = ContextDir::new(current_dir, file_root);
-        assert!(context_dir.is_access_allowed("foo.bin"));
-        assert!(context_dir.is_access_allowed("/tmp/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/foo.bin"));
-        assert!(context_dir.is_access_allowed("a/b/foo.bin"));
-        assert!(context_dir.is_access_allowed("../tmp/a/b/foo.bin"));
-        assert!(context_dir.is_access_allowed("../../../tmp/a/b/foo.bin"));
+        let ctx = ContextDir::new(current_dir, file_root);
+        assert!(ctx.is_access_allowed(Path::new("foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("/tmp/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("a/b/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("../tmp/a/b/foo.bin")));
+        assert!(ctx.is_access_allowed(Path::new("../../../tmp/a/b/foo.bin")));
 
-        assert!(!context_dir.is_access_allowed("/file/foo.bin"));
-        assert!(!context_dir.is_access_allowed("../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../foo.bin"));
-        assert!(!context_dir.is_access_allowed("../../file/foo.bin"));
+        assert!(!ctx.is_access_allowed(Path::new("/file/foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../foo.bin")));
+        assert!(!ctx.is_access_allowed(Path::new("../../file/foo.bin")));
     }
 
     #[test]

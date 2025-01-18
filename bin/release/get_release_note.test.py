@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
+import datetime
 import unittest
 
-from get_release_note import *
-
+from get_release_note import (
+    Issue,
+    Pull,
+    authors_from_issues,
+    generate_md,
+    pulls_from_issues,
+    webscrapping_linked_pulls,
+)
 
 ISSUES = [
     Issue(number=1, tags=["enhancement"], author="bob", pulls=[Pull("url1", "pull1")]),

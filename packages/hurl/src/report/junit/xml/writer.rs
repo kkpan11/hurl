@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
  *
  */
 use std::borrow::Cow;
+use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::string::FromUtf8Error;
 
 use xml::attribute::Attribute;
@@ -24,7 +26,6 @@ use xml::namespace::Namespace;
 use xml::writer::{Error, XmlEvent};
 use xml::EventWriter;
 
-use crate::report::junit::xml::writer::WriterError::GenericError;
 use crate::report::junit::xml::{Element, XmlDocument, XmlNode};
 
 /// Errors raised when serializing an XML document.
@@ -35,6 +36,16 @@ pub enum WriterError {
     GenericError(String),
 }
 
+impl fmt::Display for WriterError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WriterError::Io(err) => write!(f, "{err}"),
+            WriterError::FromUtf8Error(err) => write!(f, "{err}"),
+            WriterError::GenericError(err) => write!(f, "{err}"),
+        }
+    }
+}
+
 impl From<Error> for WriterError {
     fn from(value: Error) -> Self {
         match value {
@@ -42,7 +53,7 @@ impl From<Error> for WriterError {
             Error::DocumentStartAlreadyEmitted
             | Error::LastElementNameNotAvailable
             | Error::EndElementNameIsNotEqualToLastStartElementName
-            | Error::EndElementNameIsNotSpecified => GenericError(value.to_string()),
+            | Error::EndElementNameIsNotSpecified => WriterError::GenericError(value.to_string()),
         }
     }
 }
@@ -198,7 +209,7 @@ mod tests {
         let doc = XmlDocument { root: Some(root) };
         assert_eq!(
             doc.to_string().unwrap(),
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
             <catalog>\
                 <book id=\"bk101\">\
                     <author>Gambardella, Matthew</author>\

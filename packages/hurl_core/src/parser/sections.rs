@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,21 @@
  * limitations under the License.
  *
  */
-use crate::ast::*;
-use crate::parser::combinators::*;
-use crate::parser::error::*;
+use crate::ast::{
+    Assert, Capture, Cookie, FileParam, FileValue, MultipartParam, Section, SectionValue,
+    SourceInfo, Whitespace,
+};
+use crate::combinator::{optional, recover, zero_or_more};
 use crate::parser::filter::filters;
 use crate::parser::predicate::predicate;
-use crate::parser::primitives::*;
+use crate::parser::primitives::{
+    key_value, line_terminator, literal, one_or_more_spaces, optional_line_terminators,
+    try_literal, zero_or_more_spaces,
+};
 use crate::parser::query::query;
-use crate::parser::reader::Reader;
-use crate::parser::string::*;
-use crate::parser::{filename, key_string, option, ParseResult};
+use crate::parser::string::unquoted_template;
+use crate::parser::{filename, key_string, option, ParseError, ParseErrorKind, ParseResult};
+use crate::reader::{Pos, Reader};
 
 pub fn request_sections(reader: &mut Reader) -> ParseResult<Vec<Section>> {
     let sections = zero_or_more(request_section, reader)?;
@@ -39,29 +44,25 @@ pub fn response_sections(reader: &mut Reader) -> ParseResult<Vec<Section>> {
 fn request_section(reader: &mut Reader) -> ParseResult<Section> {
     let line_terminators = optional_line_terminators(reader)?;
     let space0 = zero_or_more_spaces(reader)?;
-    let start = reader.state.pos;
+    let start = reader.cursor();
     let name = section_name(reader)?;
-    let source_info = SourceInfo {
-        start,
-        end: reader.state.pos,
-    };
+    let source_info = SourceInfo::new(start.pos, reader.cursor().pos);
+
     let line_terminator0 = line_terminator(reader)?;
     let value = match name.as_str() {
-        "QueryStringParams" => section_value_query_params(reader)?,
+        "Query" => section_value_query_params(reader, true)?,
+        "QueryStringParams" => section_value_query_params(reader, false)?,
         "BasicAuth" => section_value_basic_auth(reader)?,
-        "FormParams" => section_value_form_params(reader)?,
-        "MultipartFormData" => section_value_multipart_form_data(reader)?,
+        "Form" => section_value_form_params(reader, true)?,
+        "FormParams" => section_value_form_params(reader, false)?,
+        "Multipart" => section_value_multipart_form_data(reader, true)?,
+        "MultipartFormData" => section_value_multipart_form_data(reader, false)?,
         "Cookies" => section_value_cookies(reader)?,
         "Options" => section_value_options(reader)?,
         _ => {
-            return Err(Error {
-                pos: Pos {
-                    line: start.line,
-                    column: start.column + 1,
-                },
-                recoverable: false,
-                inner: ParseError::RequestSectionName { name: name.clone() },
-            });
+            let kind = ParseErrorKind::RequestSectionName { name: name.clone() };
+            let pos = Pos::new(start.pos.line, start.pos.column + 1);
+            return Err(ParseError::new(pos, false, kind));
         }
     };
 
@@ -77,25 +78,19 @@ fn request_section(reader: &mut Reader) -> ParseResult<Section> {
 fn response_section(reader: &mut Reader) -> ParseResult<Section> {
     let line_terminators = optional_line_terminators(reader)?;
     let space0 = zero_or_more_spaces(reader)?;
-    let start = reader.state.pos;
+    let start = reader.cursor();
     let name = section_name(reader)?;
-    let source_info = SourceInfo {
-        start,
-        end: reader.state.pos,
-    };
+    let end = reader.cursor();
+    let source_info = SourceInfo::new(start.pos, end.pos);
+
     let line_terminator0 = line_terminator(reader)?;
     let value = match name.as_str() {
         "Captures" => section_value_captures(reader)?,
         "Asserts" => section_value_asserts(reader)?,
         _ => {
-            return Err(Error {
-                pos: Pos {
-                    line: start.line,
-                    column: start.column + 1,
-                },
-                recoverable: false,
-                inner: ParseError::ResponseSectionName { name: name.clone() },
-            });
+            let kind = ParseErrorKind::ResponseSectionName { name: name.clone() };
+            let pos = Pos::new(start.pos.line, start.pos.column + 1);
+            return Err(ParseError::new(pos, false, kind));
         }
     };
 
@@ -109,26 +104,23 @@ fn response_section(reader: &mut Reader) -> ParseResult<Section> {
 }
 
 fn section_name(reader: &mut Reader) -> ParseResult<String> {
-    let pos = reader.state.pos;
+    let pos = reader.cursor().pos;
     try_literal("[", reader)?;
     let name = reader.read_while(|c| c.is_alphanumeric());
     if name.is_empty() {
         // Could be the empty json array for the body
-        return Err(Error {
-            pos,
-            recoverable: true,
-            inner: ParseError::Expecting {
-                value: "a valid section name".to_string(),
-            },
-        });
+        let kind = ParseErrorKind::Expecting {
+            value: "a valid section name".to_string(),
+        };
+        return Err(ParseError::new(pos, true, kind));
     }
     try_literal("]", reader)?;
     Ok(name)
 }
 
-fn section_value_query_params(reader: &mut Reader) -> ParseResult<SectionValue> {
+fn section_value_query_params(reader: &mut Reader, short: bool) -> ParseResult<SectionValue> {
     let items = zero_or_more(key_value, reader)?;
-    Ok(SectionValue::QueryParams(items))
+    Ok(SectionValue::QueryParams(items, short))
 }
 
 fn section_value_basic_auth(reader: &mut Reader) -> ParseResult<SectionValue> {
@@ -136,14 +128,17 @@ fn section_value_basic_auth(reader: &mut Reader) -> ParseResult<SectionValue> {
     Ok(SectionValue::BasicAuth(v))
 }
 
-fn section_value_form_params(reader: &mut Reader) -> ParseResult<SectionValue> {
+fn section_value_form_params(reader: &mut Reader, short: bool) -> ParseResult<SectionValue> {
     let items = zero_or_more(key_value, reader)?;
-    Ok(SectionValue::FormParams(items))
+    Ok(SectionValue::FormParams(items, short))
 }
 
-fn section_value_multipart_form_data(reader: &mut Reader) -> ParseResult<SectionValue> {
+fn section_value_multipart_form_data(
+    reader: &mut Reader,
+    short: bool,
+) -> ParseResult<SectionValue> {
     let items = zero_or_more(multipart_param, reader)?;
-    Ok(SectionValue::MultipartFormData(items))
+    Ok(SectionValue::MultipartFormData(items, short))
 }
 
 fn section_value_cookies(reader: &mut Reader) -> ParseResult<SectionValue> {
@@ -188,12 +183,12 @@ fn cookie(reader: &mut Reader) -> ParseResult<Cookie> {
 }
 
 fn multipart_param(reader: &mut Reader) -> ParseResult<MultipartParam> {
-    let save = reader.state;
+    let save = reader.cursor();
     match file_param(reader) {
         Ok(f) => Ok(MultipartParam::FileParam(f)),
         Err(e) => {
             if e.recoverable {
-                reader.state = save;
+                reader.seek(save);
                 let param = key_value(reader)?;
                 Ok(MultipartParam::Param(param))
             } else {
@@ -229,10 +224,10 @@ fn file_value(reader: &mut Reader) -> ParseResult<FileValue> {
     let f = filename::parse(reader)?;
     let space1 = zero_or_more_spaces(reader)?;
     literal(";", reader)?;
-    let save = reader.state;
+    let save = reader.cursor();
     let (space2, content_type) = match line_terminator(reader) {
         Ok(_) => {
-            reader.state = save;
+            reader.seek(save);
             let space2 = Whitespace {
                 value: String::new(),
                 source_info: SourceInfo {
@@ -243,7 +238,7 @@ fn file_value(reader: &mut Reader) -> ParseResult<FileValue> {
             (space2, None)
         }
         Err(_) => {
-            reader.state = save;
+            reader.seek(save);
             let space2 = zero_or_more_spaces(reader)?;
             let content_type = file_content_type(reader)?;
             (space2, Some(content_type))
@@ -260,16 +255,16 @@ fn file_value(reader: &mut Reader) -> ParseResult<FileValue> {
 }
 
 fn file_content_type(reader: &mut Reader) -> ParseResult<String> {
-    let start = reader.state;
+    let start = reader.cursor();
     let mut buf = String::new();
     let mut spaces = String::new();
-    let mut save = reader.state;
+    let mut save = reader.cursor();
     while let Some(c) = reader.read() {
         if c.is_alphanumeric() || c == '/' || c == ';' || c == '=' || c == '-' {
             buf.push_str(spaces.as_str());
             spaces = String::new();
             buf.push(c);
-            save = reader.state;
+            save = reader.cursor();
         } else if c == ' ' {
             spaces.push(' ');
         } else {
@@ -277,13 +272,13 @@ fn file_content_type(reader: &mut Reader) -> ParseResult<String> {
         }
     }
 
-    reader.state = save;
+    reader.seek(save);
     if buf.is_empty() {
-        return Err(Error {
-            pos: start.pos,
-            recoverable: false,
-            inner: ParseError::FileContentType,
-        });
+        return Err(ParseError::new(
+            start.pos,
+            false,
+            ParseErrorKind::FileContentType,
+        ));
     }
     Ok(buf)
 }
@@ -297,6 +292,8 @@ fn capture(reader: &mut Reader) -> ParseResult<Capture> {
     let space2 = zero_or_more_spaces(reader)?;
     let q = query(reader)?;
     let filters = filters(reader)?;
+    let space3 = zero_or_more_spaces(reader)?;
+    let redact = try_literal("redact", reader).is_ok();
     let line_terminator0 = line_terminator(reader)?;
     Ok(Capture {
         line_terminators,
@@ -306,6 +303,8 @@ fn capture(reader: &mut Reader) -> ParseResult<Capture> {
         space2,
         query: q,
         filters,
+        space3,
+        redact,
         line_terminator0,
     })
 }
@@ -333,7 +332,10 @@ fn assert(reader: &mut Reader) -> ParseResult<Assert> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Pos;
+    use crate::ast::{
+        KeyValue, LineTerminator, Number, Predicate, PredicateFunc, PredicateFuncValue,
+        PredicateValue, Query, QueryValue, Template, TemplateElement, I64,
+    };
 
     #[test]
     fn test_section_name() {
@@ -416,7 +418,6 @@ mod tests {
                                     }],
                                     source_info: SourceInfo::new(Pos::new(2, 22), Pos::new(2, 41)),
                                 }),
-                                operator: true,
                             },
                         },
                     },
@@ -443,8 +444,8 @@ mod tests {
         let error = response_section(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 1 });
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from("[")
             }
         );
@@ -454,8 +455,8 @@ mod tests {
         let error = response_section(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 2 });
         assert_eq!(
-            error.inner,
-            ParseError::ResponseSectionName {
+            error.kind,
+            ParseErrorKind::ResponseSectionName {
                 name: String::from("Assertsx")
             }
         );
@@ -493,8 +494,8 @@ mod tests {
         );
         assert!(!error.recoverable);
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: "}}".to_string()
             }
         );
@@ -510,8 +511,12 @@ mod tests {
                     value: String::new(),
                     source_info: SourceInfo::new(Pos::new(1, 6), Pos::new(1, 6)),
                 },
-                filename: Filename {
-                    value: "hello.txt".to_string(),
+                filename: Template {
+                    delimiter: None,
+                    elements: vec![TemplateElement::String {
+                        value: "hello.txt".to_string(),
+                        encoded: "hello.txt".to_string(),
+                    }],
                     source_info: SourceInfo::new(Pos::new(1, 6), Pos::new(1, 15)),
                 },
                 space1: Whitespace {
@@ -533,8 +538,12 @@ mod tests {
                     value: String::new(),
                     source_info: SourceInfo::new(Pos::new(1, 6), Pos::new(1, 6)),
                 },
-                filename: Filename {
-                    value: "hello.txt".to_string(),
+                filename: Template {
+                    elements: vec![TemplateElement::String {
+                        value: "hello.txt".to_string(),
+                        encoded: "hello.txt".to_string(),
+                    }],
+                    delimiter: None,
                     source_info: SourceInfo::new(Pos::new(1, 6), Pos::new(1, 15)),
                 },
                 space1: Whitespace {
@@ -557,21 +566,21 @@ mod tests {
             file_content_type(&mut reader).unwrap(),
             "text/html".to_string()
         );
-        assert_eq!(reader.state.cursor, 9);
+        assert_eq!(reader.cursor().index, 9);
 
         let mut reader = Reader::new("text/plain; charset=us-ascii");
         assert_eq!(
             file_content_type(&mut reader).unwrap(),
             "text/plain; charset=us-ascii".to_string()
         );
-        assert_eq!(reader.state.cursor, 28);
+        assert_eq!(reader.cursor().index, 28);
 
         let mut reader = Reader::new("text/html # comment");
         assert_eq!(
             file_content_type(&mut reader).unwrap(),
             "text/html".to_string()
         );
-        assert_eq!(reader.state.cursor, 9);
+        assert_eq!(reader.cursor().index, 9);
     }
 
     #[test]
@@ -610,6 +619,10 @@ mod tests {
                 },
             }
         );
+
+        let mut reader = Reader::new("url: header \"Token\" redact");
+        let capture0 = capture(&mut reader).unwrap();
+        assert!(capture0.redact);
     }
 
     #[test]
@@ -637,7 +650,7 @@ mod tests {
                 },
             }
         );
-        assert_eq!(reader.state.cursor, 43);
+        assert_eq!(reader.cursor().index, 43);
     }
 
     #[test]
@@ -652,8 +665,8 @@ mod tests {
             }
         );
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: "\" or /".to_string()
             }
         );
@@ -669,8 +682,8 @@ mod tests {
             }
         );
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: "line_terminator".to_string()
             }
         );
@@ -723,8 +736,10 @@ mod tests {
                             value: String::from(" "),
                             source_info: SourceInfo::new(Pos::new(1, 23), Pos::new(1, 24)),
                         },
-                        value: PredicateValue::Number(Number::Integer(5)),
-                        operator: true,
+                        value: PredicateValue::Number(Number::Integer(I64::new(
+                            5,
+                            "5".to_string()
+                        ))),
                     },
                 },
             }
@@ -799,7 +814,7 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 12)),
             }
         );
-        assert_eq!(reader.state.pos, Pos { line: 3, column: 1 });
+        assert_eq!(reader.cursor().pos, Pos { line: 3, column: 1 });
 
         let mut reader = Reader::new("[BasicAuth]\nHTTP 200\n");
         assert_eq!(
@@ -825,6 +840,6 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 12)),
             }
         );
-        assert_eq!(reader.state.pos, Pos { line: 2, column: 1 });
+        assert_eq!(reader.cursor().pos, Pos { line: 2, column: 1 });
     }
 }

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,72 +15,79 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
-use hurl_core::ast::*;
+use hurl_core::ast::{
+    CertificateAttributeName, CookieAttribute, CookieAttributeName, CookiePath, Query, QueryValue,
+    RegexValue, SourceInfo, Template,
+};
 use regex::Regex;
 use sha2::Digest;
 
 use crate::http;
-use crate::runner::error::{Error, RunnerError};
+use crate::runner::cache::BodyCache;
+use crate::runner::error::{RunnerError, RunnerErrorKind};
 use crate::runner::template::eval_template;
-use crate::runner::{filter, Number, Value};
+use crate::runner::xpath::{Document, Format};
+use crate::runner::{filter, Number, Value, VariableSet};
 
-pub type QueryResult = Result<Option<Value>, Error>;
+pub type QueryResult = Result<Option<Value>, RunnerError>;
 
-/// Evaluates this `query` and returns a [`QueryResult`], using the HTTP response `http_response` and `variables`.
+/// Evaluates this `query` and returns a [`QueryResult`], using the HTTP `response` and `variables`.
 pub fn eval_query(
     query: &Query,
-    variables: &HashMap<String, Value>,
-    http_response: &http::Response,
+    variables: &VariableSet,
+    response: &http::Response,
+    cache: &mut BodyCache,
 ) -> QueryResult {
-    match query.value.clone() {
-        QueryValue::Status => eval_query_status(http_response),
-        QueryValue::Url => eval_query_url(http_response),
-        QueryValue::Header { name, .. } => eval_query_header(http_response, &name, variables),
+    match &query.value {
+        QueryValue::Status => eval_query_status(response),
+        QueryValue::Url => eval_query_url(response),
+        QueryValue::Header { name, .. } => eval_query_header(response, name, variables),
         QueryValue::Cookie {
             expr: CookiePath { name, attribute },
             ..
-        } => eval_query_cookie(http_response, &name, &attribute, variables),
-        QueryValue::Body => eval_query_body(http_response, query.source_info),
+        } => eval_query_cookie(response, name, attribute, variables),
+        QueryValue::Body => eval_query_body(response, query.source_info),
         QueryValue::Xpath { expr, .. } => {
-            eval_query_xpath(http_response, &expr, variables, query.source_info)
+            eval_query_xpath(response, cache, expr, variables, query.source_info)
         }
         QueryValue::Jsonpath { expr, .. } => {
-            eval_query_jsonpath(http_response, &expr, variables, query.source_info)
+            eval_query_jsonpath(response, cache, expr, variables, query.source_info)
         }
         QueryValue::Regex { value, .. } => {
-            eval_query_regex(http_response, &value, variables, query.source_info)
+            eval_query_regex(response, value, variables, query.source_info)
         }
-        QueryValue::Variable { name, .. } => eval_query_variable(&name, variables),
-        QueryValue::Duration => eval_query_duration(http_response),
-        QueryValue::Bytes => eval_query_bytes(http_response, query.source_info),
-        QueryValue::Sha256 => eval_query_sha256(http_response, query.source_info),
-        QueryValue::Md5 => eval_query_md5(http_response, query.source_info),
+        QueryValue::Variable { name, .. } => eval_query_variable(name, variables),
+        QueryValue::Duration => eval_query_duration(response),
+        QueryValue::Bytes => eval_query_bytes(response, query.source_info),
+        QueryValue::Sha256 => eval_query_sha256(response, query.source_info),
+        QueryValue::Md5 => eval_query_md5(response, query.source_info),
         QueryValue::Certificate {
             attribute_name: field,
             ..
-        } => eval_query_certificate(http_response, field),
+        } => eval_query_certificate(response, *field),
     }
 }
 
+/// Evaluates the response status code using the HTTP `response`.
 fn eval_query_status(response: &http::Response) -> QueryResult {
     Ok(Some(Value::Number(Number::Integer(i64::from(
         response.status,
     )))))
 }
 
+/// Evaluates the final URL of the HTTP `response`.
 fn eval_query_url(response: &http::Response) -> QueryResult {
-    Ok(Some(Value::String(response.url.clone())))
+    Ok(Some(Value::String(response.url.to_string())))
 }
 
+/// Evaluates a response query header `name`, on the HTTP `response` given a set of `variables`.
 fn eval_query_header(
     response: &http::Response,
-    header: &Template,
-    variables: &HashMap<String, Value>,
+    name: &Template,
+    variables: &VariableSet,
 ) -> QueryResult {
-    let header = eval_template(header, variables)?;
-    let values = response.get_header_values(&header);
+    let name = eval_template(name, variables)?;
+    let values = response.headers.values(&name);
     if values.is_empty() {
         Ok(None)
     } else if values.len() == 1 {
@@ -95,14 +102,15 @@ fn eval_query_header(
     }
 }
 
+/// Evaluates a cookie query `name` with optional attributes, on the HTTP `response` given a set of `variables`.
 fn eval_query_cookie(
     response: &http::Response,
     name: &Template,
     attribute: &Option<CookieAttribute>,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
 ) -> QueryResult {
     let name = eval_template(name, variables)?;
-    match response.get_cookie(name) {
+    match response.get_cookie(&name) {
         None => Ok(None),
         Some(cookie) => {
             let attribute_name = if let Some(attribute) = attribute {
@@ -115,56 +123,157 @@ fn eval_query_cookie(
     }
 }
 
+/// Evaluates the HTTP `response` body as text.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
 fn eval_query_body(response: &http::Response, query_source_info: SourceInfo) -> QueryResult {
     // Can return a string if encoding is known and utf8.
     match response.text() {
         Ok(s) => Ok(Some(Value::String(s))),
-        Err(inner) => Err(Error::new(query_source_info, inner.into(), false)),
+        Err(inner) => Err(RunnerError::new(
+            query_source_info,
+            RunnerErrorKind::Http(inner),
+            false,
+        )),
     }
 }
 
+/// Evaluates a XPath expression on the HTTP `response` body, given a set of `variables`.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
 fn eval_query_xpath(
     response: &http::Response,
+    cache: &mut BodyCache,
     expr: &Template,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     query_source_info: SourceInfo,
 ) -> QueryResult {
-    match response.text() {
-        Ok(xml) => {
-            filter::eval_xpath_string(&xml, expr, variables, query_source_info, response.is_html())
-        }
-        Err(inner) => Err(Error::new(query_source_info, inner.into(), false)),
-    }
+    let doc = match cache.xml() {
+        Some(d) => d,
+        None => parse_cache_xml(response, cache, query_source_info)?,
+    };
+    filter::eval_xpath_doc(doc, expr, variables)
 }
 
+/// Parse this HTTP `response` body to a structured XML document, and store the document to the
+/// response `cache`.
+///
+/// `query_source_info` is used for error reporting.
+fn parse_cache_xml<'cache>(
+    response: &http::Response,
+    cache: &'cache mut BodyCache,
+    query_source_info: SourceInfo,
+) -> Result<&'cache Document, RunnerError> {
+    // Get the response as text if possible
+    let text = match response.text() {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::Http(e),
+                false,
+            ))
+        }
+    };
+    let format = if response.is_html() {
+        Format::Html
+    } else {
+        Format::Xml
+    };
+    let Ok(doc) = Document::parse(&text, format) else {
+        return Err(RunnerError::new(
+            query_source_info,
+            RunnerErrorKind::QueryInvalidXml,
+            false,
+        ));
+    };
+    // Everything is ok, we can put the response in the cache
+    cache.set_xml(doc);
+    Ok(cache.xml().unwrap())
+}
+
+/// Evaluates a JSONPath expression on the HTTP `response` body, given a set of `variables`.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
 fn eval_query_jsonpath(
     response: &http::Response,
+    cache: &mut BodyCache,
     expr: &Template,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     query_source_info: SourceInfo,
 ) -> QueryResult {
-    match response.text() {
-        Ok(json) => filter::eval_jsonpath_string(&json, expr, variables, query_source_info),
-        Err(inner) => Err(Error::new(query_source_info, inner.into(), false)),
-    }
+    let json = match cache.json() {
+        Some(j) => j,
+        None => parse_cache_json(response, cache, query_source_info)?,
+    };
+    filter::eval_jsonpath_json(json, expr, variables)
 }
 
+/// Parse this HTTP `response` body to JSON, and store the document to the response `cache`.
+///
+/// `query_source_info` is used for error reporting.
+fn parse_cache_json<'cache>(
+    response: &http::Response,
+    cache: &'cache mut BodyCache,
+    query_source_info: SourceInfo,
+) -> Result<&'cache serde_json::Value, RunnerError> {
+    // Get the response as text if possible
+    let text = match response.text() {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::Http(e),
+                false,
+            ))
+        }
+    };
+    let json = match serde_json::from_str(&text) {
+        Err(_) => {
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::QueryInvalidJson,
+                false,
+            ));
+        }
+        Ok(v) => v,
+    };
+    // Everything is ok, we can put the response in the cache
+    cache.set_json(json);
+    Ok(cache.json().unwrap())
+}
+
+/// Evaluates a regex query on the HTTP `response` body, given a set of `variables`.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
 fn eval_query_regex(
     response: &http::Response,
     regex: &RegexValue,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     query_source_info: SourceInfo,
 ) -> QueryResult {
     let s = match response.text() {
         Ok(v) => v,
-        Err(inner) => return Err(Error::new(query_source_info, inner.into(), false)),
+        Err(inner) => {
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::Http(inner),
+                false,
+            ))
+        }
     };
     let re = match regex {
         RegexValue::Template(t) => {
             let value = eval_template(t, variables)?;
             match Regex::new(value.as_str()) {
                 Ok(re) => re,
-                Err(_) => return Err(Error::new(t.source_info, RunnerError::InvalidRegex, false)),
+                Err(_) => {
+                    return Err(RunnerError::new(
+                        t.source_info,
+                        RunnerErrorKind::InvalidRegex,
+                        false,
+                    ))
+                }
             }
         }
         RegexValue::Regex(re) => re.inner.clone(),
@@ -178,33 +287,50 @@ fn eval_query_regex(
     }
 }
 
-fn eval_query_variable(name: &Template, variables: &HashMap<String, Value>) -> QueryResult {
+/// Evaluates a variable, given a set of `variables`.
+fn eval_query_variable(name: &Template, variables: &VariableSet) -> QueryResult {
     let name = eval_template(name, variables)?;
-    if let Some(value) = variables.get(name.as_str()) {
-        Ok(Some(value.clone()))
+    if let Some(variable) = variables.get(&name) {
+        Ok(Some(variable.value().clone()))
     } else {
         Ok(None)
     }
 }
 
+/// Evaluates the effective duration of the HTTP `response` (only transfer time, assert and captures
+/// are not taken into account).
 fn eval_query_duration(response: &http::Response) -> QueryResult {
     Ok(Some(Value::Number(Number::Integer(
         response.duration.as_millis() as i64,
     ))))
 }
 
+/// Evaluates the HTTP `response` body as bytes.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
 fn eval_query_bytes(response: &http::Response, query_source_info: SourceInfo) -> QueryResult {
     match response.uncompress_body() {
         Ok(s) => Ok(Some(Value::Bytes(s))),
-        Err(inner) => Err(Error::new(query_source_info, inner.into(), false)),
+        Err(inner) => Err(RunnerError::new(
+            query_source_info,
+            RunnerErrorKind::Http(inner),
+            false,
+        )),
     }
 }
 
+/// Evaluates the SHA-256 hash of the HTTP `response` body bytes.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
 fn eval_query_sha256(response: &http::Response, query_source_info: SourceInfo) -> QueryResult {
     let bytes = match response.uncompress_body() {
         Ok(s) => s,
         Err(inner) => {
-            return Err(Error::new(query_source_info, inner.into(), false));
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::Http(inner),
+                false,
+            ));
         }
     };
     let mut hasher = sha2::Sha256::new();
@@ -214,17 +340,25 @@ fn eval_query_sha256(response: &http::Response, query_source_info: SourceInfo) -
     Ok(Some(bytes))
 }
 
+/// Evaluates the MD-5 hash of the HTTP `response` body bytes.
+///
+/// `query_source_info` is the source position of the query, used if an error is returned.
 fn eval_query_md5(response: &http::Response, query_source_info: SourceInfo) -> QueryResult {
     let bytes = match response.uncompress_body() {
         Ok(s) => s,
         Err(inner) => {
-            return Err(Error::new(query_source_info, inner.into(), false));
+            return Err(RunnerError::new(
+                query_source_info,
+                RunnerErrorKind::Http(inner),
+                false,
+            ));
         }
     };
     let bytes = md5::compute(bytes).to_vec();
     Ok(Some(Value::Bytes(bytes)))
 }
 
+/// Evaluates the SSL certificate attribute, of the HTTP `response`.
 fn eval_query_certificate(
     response: &http::Response,
     certificate_attribute: CertificateAttributeName,
@@ -252,10 +386,13 @@ fn eval_cookie_attribute_name(
     match cookie_attribute_name {
         CookieAttributeName::Value(_) => Some(Value::String(cookie.value)),
         CookieAttributeName::Expires(_) => {
-            let s = cookie.expires().unwrap();
-            match chrono::DateTime::parse_from_rfc2822(s.as_str()) {
-                Ok(v) => Some(Value::Date(v.with_timezone(&chrono::Utc))),
-                Err(_) => todo!(),
+            if let Some(s) = cookie.expires() {
+                match chrono::DateTime::parse_from_rfc2822(s.as_str()) {
+                    Ok(v) => Some(Value::Date(v.with_timezone(&chrono::Utc))),
+                    Err(_) => todo!(),
+                }
+            } else {
+                None
             }
         }
         CookieAttributeName::MaxAge(_) => {
@@ -292,7 +429,7 @@ impl Value {
                 } else if n.is_i64() {
                     Value::Number(Number::from(n.as_i64().unwrap()))
                 } else {
-                    Value::Number(Number::String(n.to_string()))
+                    Value::Number(Number::BigInteger(n.to_string()))
                 }
             }
             serde_json::Value::String(s) => Value::String(s.to_string()),
@@ -314,9 +451,23 @@ impl Value {
 #[cfg(test)]
 pub mod tests {
     use hex_literal::hex;
-    use hurl_core::ast::{Pos, SourceInfo};
+    use hurl_core::ast::{SourceInfo, TemplateElement, Whitespace};
+    use hurl_core::reader::Pos;
 
     use super::*;
+    use crate::http::{HeaderVec, HttpError, HttpVersion};
+
+    fn default_response() -> http::Response {
+        http::Response {
+            version: HttpVersion::Http10,
+            status: 200,
+            headers: HeaderVec::new(),
+            body: vec![],
+            duration: Default::default(),
+            url: "http://localhost".parse().unwrap(),
+            certificate: None,
+        }
+    }
 
     pub fn xpath_invalid_query() -> Query {
         // xpath ???
@@ -505,13 +656,21 @@ pub mod tests {
             serde_json::from_str("1000000000000000000000").unwrap();
         assert_eq!(
             Value::from_json(&json_number),
-            Value::Number(Number::String("1000000000000000000000".to_string()))
-        )
+            Value::Number(Number::BigInteger("1000000000000000000000".to_string()))
+        );
+
+        let json_number: serde_json::Value =
+            serde_json::from_str("1000000000000000000000.5").unwrap();
+        assert_eq!(
+            Value::from_json(&json_number),
+            Value::Number(Number::Float(1000000000000000000000.5f64))
+        );
     }
 
     #[test]
     fn test_query_status() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
         assert_eq!(
             eval_query(
                 &Query {
@@ -520,6 +679,7 @@ pub mod tests {
                 },
                 &variables,
                 &http::hello_http_response(),
+                &mut cache,
             )
             .unwrap()
             .unwrap(),
@@ -529,7 +689,9 @@ pub mod tests {
 
     #[test]
     fn test_header_not_found() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         // header Custom
         let query_header = Query {
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
@@ -552,7 +714,13 @@ pub mod tests {
         //    assert_eq!(error.source_info.start, Pos { line: 1, column: 8 });
         //    assert_eq!(error.inner, RunnerError::QueryHeaderNotFound);
         assert_eq!(
-            eval_query(&query_header, &variables, &http::hello_http_response()).unwrap(),
+            eval_query(
+                &query_header,
+                &variables,
+                &http::hello_http_response(),
+                &mut cache
+            )
+            .unwrap(),
             None
         );
     }
@@ -560,7 +728,9 @@ pub mod tests {
     #[test]
     fn test_header() {
         // header Content-Type
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         let query_header = Query {
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             value: QueryValue::Header {
@@ -579,25 +749,33 @@ pub mod tests {
             },
         };
         assert_eq!(
-            eval_query(&query_header, &variables, &http::hello_http_response())
-                .unwrap()
-                .unwrap(),
+            eval_query(
+                &query_header,
+                &variables,
+                &http::hello_http_response(),
+                &mut cache
+            )
+            .unwrap()
+            .unwrap(),
             Value::String(String::from("text/html; charset=utf-8"))
         );
     }
 
     #[test]
     fn test_query_cookie() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         let space = Whitespace {
             value: String::new(),
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
         };
+        let mut headers = HeaderVec::new();
+        headers.push(http::Header::new("Set-Cookie", "LSID=DQAAAKEaem_vYg; Path=/accounts; Expires=Wed, 13 Jan 2021 22:23:01 GMT; Secure; HttpOnly"));
+
         let response = http::Response {
-            headers: vec![
-                http::Header::new("Set-Cookie", "LSID=DQAAAKEaem_vYg; Path=/accounts; Expires=Wed, 13 Jan 2021 22:23:01 GMT; Secure; HttpOnly")
-            ],
-            ..Default::default()
+            headers,
+            ..default_response()
         };
 
         // cookie "LSID"
@@ -619,7 +797,9 @@ pub mod tests {
             },
         };
         assert_eq!(
-            eval_query(&query, &variables, &response).unwrap().unwrap(),
+            eval_query(&query, &variables, &response, &mut cache)
+                .unwrap()
+                .unwrap(),
             Value::String("DQAAAKEaem_vYg".to_string())
         );
 
@@ -646,7 +826,9 @@ pub mod tests {
             },
         };
         assert_eq!(
-            eval_query(&query, &variables, &response).unwrap().unwrap(),
+            eval_query(&query, &variables, &response, &mut cache)
+                .unwrap()
+                .unwrap(),
             Value::String("/accounts".to_string())
         );
 
@@ -673,7 +855,9 @@ pub mod tests {
             },
         };
         assert_eq!(
-            eval_query(&query, &variables, &response).unwrap().unwrap(),
+            eval_query(&query, &variables, &response, &mut cache)
+                .unwrap()
+                .unwrap(),
             Value::Unit
         );
 
@@ -699,7 +883,10 @@ pub mod tests {
                 },
             },
         };
-        assert_eq!(eval_query(&query, &variables, &response).unwrap(), None);
+        assert_eq!(
+            eval_query(&query, &variables, &response, &mut cache).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -786,7 +973,9 @@ pub mod tests {
 
     #[test]
     fn test_body() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         assert_eq!(
             eval_query(
                 &Query {
@@ -795,6 +984,7 @@ pub mod tests {
                 },
                 &variables,
                 &http::hello_http_response(),
+                &mut cache,
             )
             .unwrap()
             .unwrap(),
@@ -807,6 +997,7 @@ pub mod tests {
             },
             &variables,
             &http::bytes_http_response(),
+            &mut cache,
         )
         .err()
         .unwrap();
@@ -815,35 +1006,39 @@ pub mod tests {
             SourceInfo::new(Pos::new(1, 1), Pos::new(1, 2))
         );
         assert_eq!(
-            error.inner,
-            RunnerError::InvalidDecoding {
+            error.kind,
+            RunnerErrorKind::Http(HttpError::InvalidDecoding {
                 charset: "utf-8".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn test_query_invalid_utf8() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         let http_response = http::Response {
             body: vec![200],
-            ..Default::default()
+            ..default_response()
         };
-        let error = eval_query(&xpath_users(), &variables, &http_response)
+        let error = eval_query(&xpath_users(), &variables, &http_response, &mut cache)
             .err()
             .unwrap();
         assert_eq!(error.source_info.start, Pos { line: 1, column: 1 });
         assert_eq!(
-            error.inner,
-            RunnerError::InvalidDecoding {
+            error.kind,
+            RunnerErrorKind::Http(HttpError::InvalidDecoding {
                 charset: "utf-8".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn test_query_xpath_error_eval() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         // xpath ^^^
         let query = Query {
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
@@ -862,22 +1057,28 @@ pub mod tests {
                 },
             },
         };
-        let error = eval_query(&query, &variables, &http::xml_two_users_http_response())
-            .err()
-            .unwrap();
-        assert_eq!(error.inner, RunnerError::QueryInvalidXpathEval);
+        let error = eval_query(
+            &query,
+            &variables,
+            &http::xml_two_users_http_response(),
+            &mut cache,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, RunnerErrorKind::QueryInvalidXpathEval);
         assert_eq!(error.source_info.start, Pos { line: 1, column: 7 });
     }
 
     #[test]
     fn test_query_xpath() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
 
         assert_eq!(
             eval_query(
                 &xpath_users(),
                 &variables,
                 &http::xml_two_users_http_response(),
+                &mut cache,
             )
             .unwrap()
             .unwrap(),
@@ -888,6 +1089,7 @@ pub mod tests {
                 &xpath_count_user_query(),
                 &variables,
                 &http::xml_two_users_http_response(),
+                &mut cache,
             )
             .unwrap()
             .unwrap(),
@@ -920,12 +1122,15 @@ pub mod tests {
 
     #[test]
     fn test_query_xpath_with_html() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         assert_eq!(
             eval_query(
                 &xpath_html_charset(),
                 &variables,
                 &http::html_http_response(),
+                &mut cache,
             )
             .unwrap()
             .unwrap(),
@@ -935,7 +1140,8 @@ pub mod tests {
 
     #[test]
     fn test_query_jsonpath_invalid_expression() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
 
         // jsonpath xxx
         let jsonpath_query = Query {
@@ -956,9 +1162,13 @@ pub mod tests {
             },
         };
 
-        let error = eval_query(&jsonpath_query, &variables, &http::json_http_response())
-            .err()
-            .unwrap();
+        let error = eval_query(
+            &jsonpath_query,
+            &variables,
+            &http::json_http_response(),
+            &mut cache,
+        )
+        .unwrap_err();
         assert_eq!(
             error.source_info.start,
             Pos {
@@ -967,8 +1177,8 @@ pub mod tests {
             }
         );
         assert_eq!(
-            error.inner,
-            RunnerError::QueryInvalidJsonpathExpression {
+            error.kind,
+            RunnerErrorKind::QueryInvalidJsonpathExpression {
                 value: "xxx".to_string()
             }
         );
@@ -976,45 +1186,59 @@ pub mod tests {
 
     #[test]
     fn test_query_invalid_json() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
         let http_response = http::Response {
             body: String::into_bytes(String::from("xxx")),
-            ..Default::default()
+            ..default_response()
         };
-        let error = eval_query(&jsonpath_success(), &variables, &http_response)
+        let error = eval_query(&jsonpath_success(), &variables, &http_response, &mut cache)
             .err()
             .unwrap();
         assert_eq!(error.source_info.start, Pos { line: 1, column: 1 });
-        assert_eq!(error.inner, RunnerError::QueryInvalidJson);
+        assert_eq!(error.kind, RunnerErrorKind::QueryInvalidJson);
     }
 
     #[test]
     fn test_query_json_not_found() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         let http_response = http::Response {
             body: String::into_bytes(String::from("{}")),
-            ..Default::default()
+            ..default_response()
         };
-        //assert_eq!(jsonpath_success().eval(http_response).unwrap(), Value::List(vec![]));
         assert_eq!(
-            eval_query(&jsonpath_success(), &variables, &http_response).unwrap(),
+            eval_query(&jsonpath_success(), &variables, &http_response, &mut cache).unwrap(),
             None
         );
     }
 
     #[test]
     fn test_query_json() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         assert_eq!(
-            eval_query(&jsonpath_success(), &variables, &http::json_http_response())
-                .unwrap()
-                .unwrap(),
+            eval_query(
+                &jsonpath_success(),
+                &variables,
+                &http::json_http_response(),
+                &mut cache
+            )
+            .unwrap()
+            .unwrap(),
             Value::Bool(false)
         );
         assert_eq!(
-            eval_query(&jsonpath_errors(), &variables, &http::json_http_response())
-                .unwrap()
-                .unwrap(),
+            eval_query(
+                &jsonpath_errors(),
+                &variables,
+                &http::json_http_response(),
+                &mut cache
+            )
+            .unwrap()
+            .unwrap(),
             Value::List(vec![
                 Value::Object(vec![(
                     String::from("id"),
@@ -1030,27 +1254,41 @@ pub mod tests {
 
     #[test]
     fn test_query_regex() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         assert_eq!(
-            eval_query(&regex_name(), &variables, &http::hello_http_response())
-                .unwrap()
-                .unwrap(),
+            eval_query(
+                &regex_name(),
+                &variables,
+                &http::hello_http_response(),
+                &mut cache
+            )
+            .unwrap()
+            .unwrap(),
             Value::String("World".to_string())
         );
 
-        let error = eval_query(&regex_invalid(), &variables, &http::hello_http_response())
-            .err()
-            .unwrap();
+        let error = eval_query(
+            &regex_invalid(),
+            &variables,
+            &http::hello_http_response(),
+            &mut cache,
+        )
+        .err()
+        .unwrap();
         assert_eq!(
             error.source_info,
             SourceInfo::new(Pos::new(1, 7), Pos::new(1, 10))
         );
-        assert_eq!(error.inner, RunnerError::InvalidRegex);
+        assert_eq!(error.kind, RunnerErrorKind::InvalidRegex);
     }
 
     #[test]
     fn test_query_bytes() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         assert_eq!(
             eval_query(
                 &Query {
@@ -1059,6 +1297,7 @@ pub mod tests {
                 },
                 &variables,
                 &http::hello_http_response(),
+                &mut cache,
             )
             .unwrap()
             .unwrap(),
@@ -1068,7 +1307,9 @@ pub mod tests {
 
     #[test]
     fn test_query_sha256() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let mut cache = BodyCache::new();
+
         assert_eq!(
             eval_query(
                 &Query {
@@ -1078,8 +1319,9 @@ pub mod tests {
                 &variables,
                 &http::Response {
                     body: vec![0xff],
-                    ..Default::default()
-                }
+                    ..default_response()
+                },
+                &mut cache,
             )
             .unwrap()
             .unwrap(),
@@ -1093,7 +1335,7 @@ pub mod tests {
     fn test_query_certificate() {
         assert!(eval_query_certificate(
             &http::Response {
-                ..Default::default()
+                ..default_response()
             },
             CertificateAttributeName::Subject
         )
@@ -1109,7 +1351,7 @@ pub mod tests {
                         expire_date: Default::default(),
                         serial_number: String::new()
                     }),
-                    ..Default::default()
+                    ..default_response()
                 },
                 CertificateAttributeName::Subject
             )

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +19,8 @@ use std::io;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use clap::parser::ValueSource;
 use clap::ArgMatches;
+use hurl_core::input::Input;
 
 use super::OptionsError;
 use crate::cli::options::{InputFormat, OutputFormat};
@@ -48,17 +48,6 @@ pub fn input_format(arg_matches: &ArgMatches) -> Result<InputFormat, OptionsErro
 }
 
 pub fn output_format(arg_matches: &ArgMatches) -> Result<OutputFormat, OptionsError> {
-    // Deprecated --format option
-    if arg_matches.value_source("format") == Some(ValueSource::CommandLine) {
-        eprintln!("--format is deprecated. use --out instead.");
-        return match get_string(arg_matches, "format").unwrap().as_str() {
-            "hurl" => Ok(OutputFormat::Hurl),
-            "json" => Ok(OutputFormat::Json),
-            "html" => Ok(OutputFormat::Html),
-            v => Err(OptionsError::Error(format!("Invalid output format {v}"))),
-        };
-    }
-
     match get_string(arg_matches, "output_format").unwrap().as_str() {
         "hurl" => Ok(OutputFormat::Hurl),
         "json" => Ok(OutputFormat::Json),
@@ -69,7 +58,7 @@ pub fn output_format(arg_matches: &ArgMatches) -> Result<OutputFormat, OptionsEr
 
 pub fn in_place(arg_matches: &ArgMatches) -> Result<bool, OptionsError> {
     if has_flag(arg_matches, "in_place") {
-        if get_string(arg_matches, "format") != Some("hurl".to_string()) {
+        if get_string(arg_matches, "input_format") != Some("hurl".to_string()) {
             Err(OptionsError::Error(
                 "You can use --in-place only hurl format!".to_string(),
             ))
@@ -86,23 +75,27 @@ pub fn in_place(arg_matches: &ArgMatches) -> Result<bool, OptionsError> {
 }
 
 /// Returns the input files from the positional arguments and input stream
-pub fn input_files(arg_matches: &ArgMatches) -> Result<Vec<String>, OptionsError> {
+pub fn input_files(arg_matches: &ArgMatches) -> Result<Vec<Input>, OptionsError> {
     let mut files = vec![];
     if let Some(filenames) = get_strings(arg_matches, "input_files") {
-        for filename in filenames {
-            let path = Path::new(&filename);
-            if path.exists() {
-                files.push(filename);
-            } else {
+        for filename in &filenames {
+            let filename = Path::new(filename);
+            if !filename.exists() {
                 return Err(OptionsError::Error(format!(
-                    "hurl: cannot access '{}': No such file or directory",
-                    path.display()
+                    "error: Cannot access '{}': No such file or directory",
+                    filename.display()
                 )));
             }
+            let file = Input::from(filename);
+            files.push(file);
         }
     }
     if files.is_empty() && !io::stdin().is_terminal() {
-        files.push("-".to_string());
+        let input = match Input::from_stdin() {
+            Ok(input) => input,
+            Err(err) => return Err(OptionsError::Error(err.to_string())),
+        };
+        files.push(input);
     }
     Ok(files)
 }

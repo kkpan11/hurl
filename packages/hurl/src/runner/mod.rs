@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,21 +18,30 @@
 
 //! A runner for Hurl files. If you want to execute an Hurl file, this is the right place.
 
-pub use self::error::{Error, RunnerError};
+pub use self::error::{RunnerError, RunnerErrorKind};
+#[doc(hidden)]
+pub use self::event::EventListener;
 pub use self::hurl_file::run;
+#[doc(hidden)]
+pub use self::hurl_file::run_entries;
 pub use self::number::Number;
 pub use self::output::Output;
 pub use self::result::{AssertResult, CaptureResult, EntryResult, HurlResult};
 pub use self::runner_options::{RunnerOptions, RunnerOptionsBuilder};
 pub use self::value::Value;
+pub use self::variable::{Variable, VariableSet, Visibility};
 
 mod assert;
 mod body;
+mod cache;
 mod capture;
+mod diff;
 mod entry;
 mod error;
+mod event;
 mod expr;
 mod filter;
+mod function;
 mod hurl_file;
 mod json;
 mod multiline;
@@ -50,4 +59,5 @@ mod result;
 mod runner_options;
 mod template;
 mod value;
+mod variable;
 mod xpath;

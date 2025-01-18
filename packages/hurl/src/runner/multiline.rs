@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,32 +15,38 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
-use hurl_core::ast::{MultilineString, Text};
+use hurl_core::ast::{MultilineString, MultilineStringKind, Text};
 use serde_json::json;
 
 use crate::runner::json::eval_json_value;
 use crate::runner::template::eval_template;
-use crate::runner::{Error, Value};
+use crate::runner::{RunnerError, VariableSet};
 
 /// Renders to string a multiline body, given a set of variables.
 pub fn eval_multiline(
     multiline: &MultilineString,
-    variables: &HashMap<String, Value>,
-) -> Result<String, Error> {
+    variables: &VariableSet,
+) -> Result<String, RunnerError> {
     match multiline {
-        MultilineString::OneLineText(value) => {
+        MultilineString {
+            kind: MultilineStringKind::Text(Text { value, .. }),
+            ..
+        }
+        | MultilineString {
+            kind: MultilineStringKind::Json(Text { value, .. }),
+            ..
+        }
+        | MultilineString {
+            kind: MultilineStringKind::Xml(Text { value, .. }),
+            ..
+        } => {
             let s = eval_template(value, variables)?;
             Ok(s)
         }
-        MultilineString::Text(Text { value, .. })
-        | MultilineString::Json(Text { value, .. })
-        | MultilineString::Xml(Text { value, .. }) => {
-            let s = eval_template(value, variables)?;
-            Ok(s)
-        }
-        MultilineString::GraphQl(graphql) => {
+        MultilineString {
+            kind: MultilineStringKind::GraphQl(graphql),
+            ..
+        } => {
             let query = eval_template(&graphql.value, variables)?;
             let body = match &graphql.variables {
                 None => json!({ "query": query.trim()}).to_string(),
@@ -57,14 +63,14 @@ pub fn eval_multiline(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use hurl_core::ast::{
-        GraphQl, GraphQlVariables, JsonObjectElement, JsonValue, MultilineString, Pos, SourceInfo,
-        Template, TemplateElement, Whitespace,
+        GraphQl, GraphQlVariables, JsonObjectElement, JsonValue, MultilineString,
+        MultilineStringKind, SourceInfo, Template, TemplateElement, Whitespace,
     };
+    use hurl_core::reader::Pos;
 
     use crate::runner::multiline::eval_multiline;
+    use crate::runner::VariableSet;
 
     fn whitespace() -> Whitespace {
         Whitespace {
@@ -92,26 +98,29 @@ mod tests {
     height(unit: FOOT)
   }
 }"#;
-        let variables = HashMap::new();
-        let multiline = MultilineString::GraphQl(GraphQl {
-            space: whitespace(),
-            newline: newline(),
-            value: Template {
-                delimiter: None,
-                elements: vec![TemplateElement::String {
-                    value: query.to_string(),
-                    encoded: query.to_string(),
-                }],
-                source_info: empty_source_info(),
-            },
-            variables: None,
-        });
+        let variables = VariableSet::new();
+        let multiline = MultilineString {
+            kind: MultilineStringKind::GraphQl(GraphQl {
+                space: whitespace(),
+                newline: newline(),
+                value: Template {
+                    delimiter: None,
+                    elements: vec![TemplateElement::String {
+                        value: query.to_string(),
+                        encoded: query.to_string(),
+                    }],
+                    source_info: empty_source_info(),
+                },
+                variables: None,
+            }),
+            attributes: vec![],
+        };
         let body = eval_multiline(&multiline, &variables).unwrap();
         assert_eq!(
             body,
             r#"{"query":"{\n  human(id: \"1000\") {\n    name\n    height(unit: FOOT)\n  }\n}"}"#
                 .to_string()
-        )
+        );
     }
 
     #[test]
@@ -122,7 +131,7 @@ mod tests {
     height(unit: FOOT)
   }
 }"#;
-        let hurl_variables = HashMap::new();
+        let hurl_variables = VariableSet::new();
         let graphql_variables = GraphQlVariables {
             space: whitespace(),
             value: JsonValue::Object {
@@ -169,21 +178,24 @@ mod tests {
             },
             whitespace: whitespace(),
         };
-        let multiline = MultilineString::GraphQl(GraphQl {
-            space: whitespace(),
-            newline: newline(),
-            value: Template {
-                delimiter: None,
-                elements: vec![TemplateElement::String {
-                    value: query.to_string(),
-                    encoded: query.to_string(),
-                }],
-                source_info: empty_source_info(),
-            },
-            variables: Some(graphql_variables),
-        });
+        let multiline = MultilineString {
+            kind: MultilineStringKind::GraphQl(GraphQl {
+                space: whitespace(),
+                newline: newline(),
+                value: Template {
+                    delimiter: None,
+                    elements: vec![TemplateElement::String {
+                        value: query.to_string(),
+                        encoded: query.to_string(),
+                    }],
+                    source_info: empty_source_info(),
+                },
+                variables: Some(graphql_variables),
+            }),
+            attributes: vec![],
+        };
 
         let body = eval_multiline(&multiline, &hurl_variables).unwrap();
-        assert_eq!(body, r#"{"query":"{\n  human(id: \"1000\") {\n    name\n    height(unit: FOOT)\n  }\n}","variables":{"episode":"JEDI","withFriends":false}}"#.to_string())
+        assert_eq!(body, r#"{"query":"{\n  human(id: \"1000\") {\n    name\n    height(unit: FOOT)\n  }\n}","variables":{"episode":"JEDI","withFriends":false}}"#.to_string());
     }
 }

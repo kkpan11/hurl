@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,13 @@
  * limitations under the License.
  *
  */
-use crate::ast::*;
-use crate::parser::combinators::*;
+use crate::ast::Bytes;
+use crate::combinator::choice;
 use crate::parser::json::parse as parse_json;
 use crate::parser::multiline::multiline_string;
-use crate::parser::primitives::*;
-use crate::parser::reader::Reader;
 use crate::parser::string::backtick_template;
-use crate::parser::{xml, ParseResult};
+use crate::parser::{primitives, xml, ParseResult};
+use crate::reader::Reader;
 
 pub fn bytes(reader: &mut Reader) -> ParseResult<Bytes> {
     choice(
@@ -54,15 +53,15 @@ fn json_bytes(reader: &mut Reader) -> ParseResult<Bytes> {
 }
 
 fn file_bytes(reader: &mut Reader) -> ParseResult<Bytes> {
-    file(reader).map(Bytes::File)
+    primitives::file(reader).map(Bytes::File)
 }
 
 fn base64_bytes(reader: &mut Reader) -> ParseResult<Bytes> {
-    base64(reader).map(Bytes::Base64)
+    primitives::base64(reader).map(Bytes::Base64)
 }
 
 fn hex_bytes(reader: &mut Reader) -> ParseResult<Bytes> {
-    hex(reader).map(Bytes::Hex)
+    primitives::hex(reader).map(Bytes::Hex)
 }
 
 pub fn multiline_string_bytes(reader: &mut Reader) -> ParseResult<Bytes> {
@@ -77,6 +76,8 @@ fn string_bytes(reader: &mut Reader) -> ParseResult<Bytes> {
 mod tests {
     use super::super::error::*;
     use super::*;
+    use crate::ast::{JsonListElement, JsonValue, SourceInfo, Template, TemplateElement};
+    use crate::reader::Pos;
 
     #[test]
     fn test_bytes_json() {
@@ -104,7 +105,7 @@ mod tests {
                 ],
             })
         );
-        assert_eq!(reader.state.cursor, 7);
+        assert_eq!(reader.cursor().index, 7);
 
         let mut reader = Reader::new("{ } ");
         assert_eq!(
@@ -114,14 +115,14 @@ mod tests {
                 elements: vec![],
             })
         );
-        assert_eq!(reader.state.cursor, 3);
+        assert_eq!(reader.cursor().index, 3);
 
         let mut reader = Reader::new("true");
         assert_eq!(
             bytes(&mut reader).unwrap(),
             Bytes::Json(JsonValue::Boolean(true))
         );
-        assert_eq!(reader.state.cursor, 4);
+        assert_eq!(reader.cursor().index, 4);
 
         let mut reader = Reader::new("\"\" x");
         assert_eq!(
@@ -132,7 +133,7 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 2), Pos::new(1, 2)),
             }))
         );
-        assert_eq!(reader.state.cursor, 2);
+        assert_eq!(reader.cursor().index, 2);
     }
 
     #[test]
@@ -150,8 +151,8 @@ mod tests {
         let error = bytes(&mut reader).err().unwrap();
         assert_eq!(error.pos, Pos { line: 1, column: 3 });
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: "\"".to_string()
             },
         );
@@ -161,8 +162,13 @@ mod tests {
     fn test_bytes_multilines_error() {
         let mut reader = Reader::new("```\nxxx ");
         let error = bytes(&mut reader).err().unwrap();
-        assert_eq!(error.pos, Pos { line: 1, column: 4 });
-        assert_eq!(error.inner, ParseError::Multiline);
+        assert_eq!(error.pos, Pos { line: 2, column: 5 });
+        assert_eq!(
+            error.kind,
+            ParseErrorKind::Expecting {
+                value: "```".to_string()
+            }
+        );
     }
 
     #[test]
@@ -170,8 +176,8 @@ mod tests {
         let mut reader = Reader::new("");
         let error = bytes(&mut reader).err().unwrap();
         assert_eq!(
-            error.inner,
-            ParseError::Expecting {
+            error.kind,
+            ParseErrorKind::Expecting {
                 value: String::from("file")
             }
         );
@@ -201,6 +207,6 @@ mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 6))
             })
         );
-        assert_eq!(reader.state.cursor, 5);
+        assert_eq!(reader.cursor().index, 5);
     }
 }

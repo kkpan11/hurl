@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,11 @@
  */
 use std::time::Duration;
 
-use hurl_core::ast::{Entry, Retry};
+use hurl_core::ast::Entry;
+use hurl_core::typing::{BytesPerSec, Count};
 
 use crate::http::{IpResolve, RequestedHttpVersion};
+use crate::runner::Output;
 use crate::util::path::ContextDir;
 
 pub struct RunnerOptionsBuilder {
@@ -35,24 +37,35 @@ pub struct RunnerOptionsBuilder {
     cookie_input_file: Option<String>,
     delay: Duration,
     follow_location: bool,
+    follow_location_trusted: bool,
+    from_entry: Option<usize>,
+    headers: Vec<String>,
     http_version: RequestedHttpVersion,
     ignore_asserts: bool,
     insecure: bool,
     ip_resolve: IpResolve,
-    max_redirect: Option<usize>,
+    max_filesize: Option<u64>,
+    max_recv_speed: Option<BytesPerSec>,
+    max_redirect: Count,
+    max_send_speed: Option<BytesPerSec>,
+    netrc: bool,
+    netrc_file: Option<String>,
+    netrc_optional: bool,
     no_proxy: Option<String>,
-    output: Option<String>,
+    output: Option<Output>,
     path_as_is: bool,
     post_entry: Option<fn() -> bool>,
-    pre_entry: Option<fn(Entry) -> bool>,
+    pre_entry: Option<fn(&Entry) -> bool>,
     proxy: Option<String>,
+    repeat: Option<Count>,
     resolves: Vec<String>,
-    retry: Retry,
+    retry: Option<Count>,
     retry_interval: Duration,
     skip: bool,
     ssl_no_revoke: bool,
     timeout: Duration,
     to_entry: Option<usize>,
+    unix_socket: Option<String>,
     user: Option<String>,
     user_agent: Option<String>,
 }
@@ -72,24 +85,35 @@ impl Default for RunnerOptionsBuilder {
             cookie_input_file: None,
             delay: Duration::from_millis(0),
             follow_location: false,
+            follow_location_trusted: false,
+            from_entry: None,
+            headers: vec![],
             http_version: RequestedHttpVersion::default(),
             ignore_asserts: false,
             insecure: false,
             ip_resolve: IpResolve::default(),
-            max_redirect: Some(50),
+            max_filesize: None,
+            max_recv_speed: None,
+            max_redirect: Count::Finite(50),
+            max_send_speed: None,
+            netrc: false,
+            netrc_file: None,
+            netrc_optional: false,
             no_proxy: None,
             output: None,
             path_as_is: false,
             post_entry: None,
             pre_entry: None,
             proxy: None,
+            repeat: None,
             resolves: vec![],
-            retry: Retry::None,
+            retry: None,
             retry_interval: Duration::from_millis(1000),
             skip: false,
             ssl_no_revoke: false,
             timeout: Duration::from_secs(300),
             to_entry: None,
+            unix_socket: None,
             user: None,
             user_agent: None,
         }
@@ -199,6 +223,26 @@ impl RunnerOptionsBuilder {
         self
     }
 
+    /// Sets follow redirect with trust.
+    ///
+    /// To limit the amount of redirects to follow use [`self.max_redirect()`]
+    pub fn follow_location_trusted(&mut self, follow_location_trusted: bool) -> &mut Self {
+        self.follow_location_trusted = follow_location_trusted;
+        self
+    }
+
+    /// Executes Hurl file from `from_entry` (starting at 1), ignores the beginning of the file.
+    pub fn from_entry(&mut self, from_entry: Option<usize>) -> &mut Self {
+        self.from_entry = from_entry;
+        self
+    }
+
+    /// Sets additional headers (overrides if a header already exists).
+    pub fn headers(&mut self, header: &[String]) -> &mut Self {
+        self.headers = header.to_vec();
+        self
+    }
+
     /// Set requested HTTP version (can be different of the effective HTTP version).
     pub fn http_version(&mut self, version: RequestedHttpVersion) -> &mut Self {
         self.http_version = version;
@@ -223,17 +267,53 @@ impl RunnerOptionsBuilder {
         self
     }
 
+    /// Set the file size limit
+    pub fn max_filesize(&mut self, max_filesize: Option<u64>) -> &mut Self {
+        self.max_filesize = max_filesize;
+        self
+    }
+
     /// Set maximum number of redirection-followings allowed
     ///
     /// By default, the limit is set to 50 redirections
-    pub fn max_redirect(&mut self, max_redirect: Option<usize>) -> &mut Self {
+    pub fn max_redirect(&mut self, max_redirect: Count) -> &mut Self {
         self.max_redirect = max_redirect;
+        self
+    }
+
+    /// Set the maximum upload speed.
+    pub fn max_send_speed(&mut self, max_send_speed: Option<BytesPerSec>) -> &mut Self {
+        self.max_send_speed = max_send_speed;
+        self
+    }
+
+    /// Set the maximum download speed.
+    pub fn max_recv_speed(&mut self, max_recv_speed: Option<BytesPerSec>) -> &mut Self {
+        self.max_recv_speed = max_recv_speed;
         self
     }
 
     /// Sets the path-as-is flag.
     pub fn path_as_is(&mut self, path_as_is: bool) -> &mut Self {
         self.path_as_is = path_as_is;
+        self
+    }
+
+    /// Sets the netrc flag.
+    pub fn netrc(&mut self, netrc: bool) -> &mut Self {
+        self.netrc = netrc;
+        self
+    }
+
+    /// Sets the netrc file.
+    pub fn netrc_file(&mut self, netrc_file: Option<String>) -> &mut Self {
+        self.netrc_file = netrc_file;
+        self
+    }
+
+    /// Sets the optional netrc flag.
+    pub fn netrc_optional(&mut self, netrc_optional: bool) -> &mut Self {
+        self.netrc_optional = netrc_optional;
         self
     }
 
@@ -244,7 +324,7 @@ impl RunnerOptionsBuilder {
     }
 
     /// Specifies the file to output the HTTP response instead of stdout.
-    pub fn output(&mut self, output: Option<String>) -> &mut Self {
+    pub fn output(&mut self, output: Option<Output>) -> &mut Self {
         self.output = output;
         self
     }
@@ -260,7 +340,7 @@ impl RunnerOptionsBuilder {
     /// Sets function to be executed before each entry execution.
     ///
     /// If the function returns true, the run is stopped.
-    pub fn pre_entry(&mut self, pre_entry: Option<fn(Entry) -> bool>) -> &mut Self {
+    pub fn pre_entry(&mut self, pre_entry: Option<fn(&Entry) -> bool>) -> &mut Self {
         self.pre_entry = pre_entry;
         self
     }
@@ -268,6 +348,12 @@ impl RunnerOptionsBuilder {
     /// Sets the specified proxy to be used.
     pub fn proxy(&mut self, proxy: Option<String>) -> &mut Self {
         self.proxy = proxy;
+        self
+    }
+
+    /// Set the number of repetition for a given entry.
+    pub fn repeat(&mut self, repeat: Option<Count>) -> &mut Self {
+        self.repeat = repeat;
         self
     }
 
@@ -280,7 +366,7 @@ impl RunnerOptionsBuilder {
     /// Sets maximum number of retries.
     ///
     /// Default is 0.
-    pub fn retry(&mut self, retry: Retry) -> &mut Self {
+    pub fn retry(&mut self, retry: Option<Count>) -> &mut Self {
         self.retry = retry;
         self
     }
@@ -312,6 +398,12 @@ impl RunnerOptionsBuilder {
         self
     }
 
+    /// Sets the specified unix domain socket to connect through, instead of using the network.
+    pub fn unix_socket(&mut self, unix_socket: Option<String>) -> &mut Self {
+        self.unix_socket = unix_socket;
+        self
+    }
+
     /// Adds basic Authentication header to each request.
     pub fn user(&mut self, user: Option<String>) -> &mut Self {
         self.user = user;
@@ -339,17 +431,27 @@ impl RunnerOptionsBuilder {
             continue_on_error: self.continue_on_error,
             cookie_input_file: self.cookie_input_file.clone(),
             follow_location: self.follow_location,
+            follow_location_trusted: self.follow_location_trusted,
+            from_entry: self.from_entry,
+            headers: self.headers.clone(),
             http_version: self.http_version,
             ignore_asserts: self.ignore_asserts,
             insecure: self.insecure,
             ip_resolve: self.ip_resolve,
+            max_filesize: self.max_filesize,
+            max_recv_speed: self.max_recv_speed,
             max_redirect: self.max_redirect,
+            max_send_speed: self.max_send_speed,
+            netrc: self.netrc,
+            netrc_file: self.netrc_file.clone(),
+            netrc_optional: self.netrc_optional,
             no_proxy: self.no_proxy.clone(),
             output: self.output.clone(),
             path_as_is: self.path_as_is,
             post_entry: self.post_entry,
             pre_entry: self.pre_entry,
             proxy: self.proxy.clone(),
+            repeat: self.repeat,
             resolves: self.resolves.clone(),
             retry: self.retry,
             retry_interval: self.retry_interval,
@@ -357,6 +459,7 @@ impl RunnerOptionsBuilder {
             ssl_no_revoke: self.ssl_no_revoke,
             timeout: self.timeout,
             to_entry: self.to_entry,
+            unix_socket: self.unix_socket.clone(),
             user: self.user.clone(),
             user_agent: self.user_agent.clone(),
         }
@@ -377,24 +480,35 @@ pub struct RunnerOptions {
     pub(crate) continue_on_error: bool,
     pub(crate) cookie_input_file: Option<String>,
     pub(crate) follow_location: bool,
+    pub(crate) follow_location_trusted: bool,
+    pub(crate) from_entry: Option<usize>,
+    pub(crate) headers: Vec<String>,
     pub(crate) http_version: RequestedHttpVersion,
     pub(crate) ignore_asserts: bool,
     pub(crate) ip_resolve: IpResolve,
     pub(crate) insecure: bool,
-    pub(crate) max_redirect: Option<usize>,
+    pub(crate) max_filesize: Option<u64>,
+    pub(crate) max_recv_speed: Option<BytesPerSec>,
+    pub(crate) max_redirect: Count,
+    pub(crate) max_send_speed: Option<BytesPerSec>,
+    pub(crate) netrc: bool,
+    pub(crate) netrc_file: Option<String>,
+    pub(crate) netrc_optional: bool,
     pub(crate) no_proxy: Option<String>,
-    pub(crate) output: Option<String>,
+    pub(crate) output: Option<Output>,
     pub(crate) path_as_is: bool,
     pub(crate) post_entry: Option<fn() -> bool>,
-    pub(crate) pre_entry: Option<fn(Entry) -> bool>,
+    pub(crate) pre_entry: Option<fn(&Entry) -> bool>,
     pub(crate) proxy: Option<String>,
+    pub(crate) repeat: Option<Count>,
     pub(crate) resolves: Vec<String>,
-    pub(crate) retry: Retry,
+    pub(crate) retry: Option<Count>,
     pub(crate) retry_interval: Duration,
     pub(crate) skip: bool,
     pub(crate) ssl_no_revoke: bool,
     pub(crate) timeout: Duration,
     pub(crate) to_entry: Option<usize>,
+    pub(crate) unix_socket: Option<String>,
     pub(crate) user: Option<String>,
     pub(crate) user_agent: Option<String>,
 }

@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,21 +15,23 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
-use hurl_core::ast::*;
+use hurl_core::ast::{Assert, SourceInfo};
+use hurl_core::reader::Pos;
 
 use crate::http;
-use crate::runner::error::{Error, RunnerError};
+use crate::runner::cache::BodyCache;
+use crate::runner::diff::diff;
+use crate::runner::error::{RunnerError, RunnerErrorKind};
 use crate::runner::filter::eval_filters;
 use crate::runner::predicate::eval_predicate;
 use crate::runner::query::eval_query;
 use crate::runner::result::AssertResult;
-use crate::runner::Value;
+use crate::runner::{Value, VariableSet};
+use crate::util::path::ContextDir;
 
 impl AssertResult {
     /// Evaluates an assert and returns `None` if assert is succeeded or an `Error` if failed.
-    pub fn error(&self) -> Option<Error> {
+    pub fn error(&self) -> Option<RunnerError> {
         match self {
             AssertResult::Version {
                 actual,
@@ -42,10 +44,10 @@ impl AssertResult {
                 {
                     None
                 } else {
-                    let inner = RunnerError::AssertVersion {
+                    let kind = RunnerErrorKind::AssertVersion {
                         actual: actual.to_string(),
                     };
-                    Some(Error::new(*source_info, inner, false))
+                    Some(RunnerError::new(*source_info, kind, false))
                 }
             }
             AssertResult::Status {
@@ -56,10 +58,10 @@ impl AssertResult {
                 if actual == expected {
                     None
                 } else {
-                    let inner = RunnerError::AssertStatus {
+                    let kind = RunnerErrorKind::AssertStatus {
                         actual: actual.to_string(),
                     };
-                    Some(Error::new(*source_info, inner, false))
+                    Some(RunnerError::new(*source_info, kind, false))
                 }
             }
             AssertResult::Header {
@@ -72,8 +74,8 @@ impl AssertResult {
                     if s == expected {
                         None
                     } else {
-                        let inner = RunnerError::AssertHeaderValueError { actual: s.clone() };
-                        Some(Error::new(*source_info, inner, false))
+                        let kind = RunnerErrorKind::AssertHeaderValueError { actual: s.clone() };
+                        Some(RunnerError::new(*source_info, kind, false))
                     }
                 }
             },
@@ -88,11 +90,29 @@ impl AssertResult {
                     Ok(actual) => {
                         if actual == expected {
                             None
+                        } else if use_diff(expected, actual) {
+                            let actual = actual.to_string();
+                            let expected = expected.to_string();
+                            let hunks = diff(&expected, &actual);
+                            let source_line = hunks
+                                .clone()
+                                .first()
+                                .expect("at least a diff hunk")
+                                .source_line;
+                            let kind = RunnerErrorKind::AssertBodyDiffError {
+                                hunks,
+                                body_source_info: *source_info,
+                            };
+                            let diff_source_info = SourceInfo::new(
+                                Pos::new(source_info.start.line + source_line, 1),
+                                Pos::new(source_info.start.line + source_line, 1),
+                            );
+                            Some(RunnerError::new(diff_source_info, kind, false))
                         } else {
                             let actual = actual.to_string();
                             let expected = expected.to_string();
-                            let inner = RunnerError::AssertBodyValueError { actual, expected };
-                            Some(Error::new(*source_info, inner, false))
+                            let kind = RunnerErrorKind::AssertBodyValueError { actual, expected };
+                            Some(RunnerError::new(*source_info, kind, false))
                         }
                     }
                 },
@@ -116,29 +136,48 @@ impl AssertResult {
     }
 }
 
-pub fn eval_assert(
+fn use_diff(expected: &Value, actual: &Value) -> bool {
+    if let (Value::String(expected), Value::String(actual)) = (actual, expected) {
+        expected.contains('\n') || actual.contains('\n')
+    } else {
+        false
+    }
+}
+
+/// Evaluates an explicit `assert`, given a set of `variables`, a HTTP response and a context
+/// directory `context_dir`.
+///
+/// The `cache` is used to store XML / JSON structured response data and avoid redundant parsing
+/// operation on the response.
+pub fn eval_explicit_assert(
     assert: &Assert,
-    variables: &HashMap<String, Value>,
+    variables: &VariableSet,
     http_response: &http::Response,
+    cache: &mut BodyCache,
+    context_dir: &ContextDir,
 ) -> AssertResult {
-    let query_result = eval_query(&assert.query, variables, http_response);
+    let query_result = eval_query(&assert.query, variables, http_response, cache);
 
     let actual = if assert.filters.is_empty() {
         query_result
     } else if let Ok(optional_value) = query_result {
         match optional_value {
-            None => Err(Error {
+            None => Err(RunnerError {
                 source_info: assert
                     .filters
                     .first()
                     .expect("at least one filter")
                     .1
                     .source_info,
-                inner: RunnerError::FilterMissingInput,
+                kind: RunnerErrorKind::FilterMissingInput,
                 assert: true,
             }),
             Some(value) => {
-                let filters = assert.filters.iter().map(|(_, f)| f.clone()).collect();
+                let filters = assert
+                    .filters
+                    .iter()
+                    .map(|(_, f)| f.clone())
+                    .collect::<Vec<_>>();
                 match eval_filters(&filters, &value, variables, true) {
                     Ok(value) => Ok(value),
                     Err(e) => Err(e),
@@ -152,7 +191,12 @@ pub fn eval_assert(
     let source_info = assert.predicate.predicate_func.source_info;
     let predicate_result = match &actual {
         Err(_) => None,
-        Ok(actual) => Some(eval_predicate(&assert.predicate, variables, actual)),
+        Ok(actual) => Some(eval_predicate(
+            &assert.predicate,
+            variables,
+            actual,
+            context_dir,
+        )),
     };
 
     AssertResult::Explicit {
@@ -164,7 +208,13 @@ pub fn eval_assert(
 
 #[cfg(test)]
 pub mod tests {
-    use hurl_core::ast::SourceInfo;
+    use std::path::Path;
+
+    use hurl_core::ast::{
+        Filter, FilterValue, LineTerminator, Predicate, PredicateFunc, PredicateFuncValue,
+        PredicateValue, SourceInfo, Whitespace, I64,
+    };
+    use hurl_core::reader::Pos;
 
     use super::super::query;
     use super::*;
@@ -184,8 +234,10 @@ pub mod tests {
                 source_info: SourceInfo::new(Pos::new(1, 22), Pos::new(1, 24)),
                 value: PredicateFuncValue::Equal {
                     space0: whitespace.clone(),
-                    value: PredicateValue::Number(hurl_core::ast::Number::Integer(3)),
-                    operator: true,
+                    value: PredicateValue::Number(hurl_core::ast::Number::Integer(I64::new(
+                        3,
+                        "3".to_string(),
+                    ))),
                 },
             },
         };
@@ -215,12 +267,18 @@ pub mod tests {
 
     #[test]
     fn test_eval() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
+        let current_dir = std::env::current_dir().unwrap();
+        let file_root = Path::new("file_root");
+        let context_dir = ContextDir::new(current_dir.as_path(), file_root);
+        let mut cache = BodyCache::new();
         assert_eq!(
-            eval_assert(
+            eval_explicit_assert(
                 &assert_count_user(),
                 &variables,
                 &xml_three_users_http_response(),
+                &mut cache,
+                &context_dir
             ),
             AssertResult::Explicit {
                 actual: Ok(Some(Value::Number(Number::Integer(3)))),
@@ -228,5 +286,18 @@ pub mod tests {
                 predicate_result: Some(Ok(())),
             }
         );
+    }
+
+    #[test]
+    pub fn test_use_diff() {
+        assert!(!use_diff(&Value::Bool(true), &Value::Bool(false)));
+        assert!(!use_diff(
+            &Value::String("a".to_string()),
+            &Value::String("b".to_string())
+        ));
+        assert!(use_diff(
+            &Value::String("a\n".to_string()),
+            &Value::String("b".to_string())
+        ));
     }
 }

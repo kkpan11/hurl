@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-import sys
 import glob
-import re
 import platform
+import re
+import sys
 
 sys.path.append("..")
 import test_script
@@ -24,13 +24,14 @@ def main():
         get_files("tests_ok/*." + extension)
         + get_files("tests_ok_not_linted/*." + extension)
         + get_files("tests_failed/*." + extension)
+        + get_files("tests_failed_not_linted/*." + extension)
         + get_files("tests_error_parser/*." + extension)
-        + get_files("ssl/*." + extension)
+        + get_files("tests_ssl/*." + extension)
     )
     for f in sorted(script_files):
         test_script.test(f)
 
-    print("test integration hurl ok!")
+    print("Test integration hurl ok!")
 
 
 if __name__ == "__main__":

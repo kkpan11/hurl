@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,12 @@ const fs = require("fs");
  * @param name name of the binary (without extension)
  */
 function run(name) {
-    const execPath = path.join(__dirname, "bin", os.platform() === "win32" ? name + ".exe" : name);
+    let execPath;
+    if (os.platform() === "win32") {
+        execPath = path.join(__dirname, "dist", name + ".exe");
+    } else {
+        execPath = path.join(__dirname, "dist", "bin", name);
+    }
 
     try {
         const result = child_process.spawnSync(
@@ -49,7 +54,7 @@ function run(name) {
 
 function throwIfNoExePath(execPath) {
     if (!fs.existsSync(execPath)) {
-        throw new Error("Could not find exe at path '" + exePath + "'. Please ensure the hurl 'postinstall' script runs on install.");
+        throw new Error(`Could not find exe at path '${execPath}'. Please ensure the hurl 'postinstall' script runs on install.`);
     }
 }
 

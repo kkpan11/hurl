@@ -1,6 +1,8 @@
 name: json
 long: json
 help: Output each Hurl file result to JSON
+help_heading: Output options
 conflict: no_output
+cli_only: true
 ---
-Output each hurl file result to JSON. The format is very closed to HAR format.
+Output each Hurl file result to JSON. The format is very closed to HAR format.

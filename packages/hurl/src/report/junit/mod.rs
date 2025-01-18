@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
  *
  */
 
-//! XML JUnit report
+//! XML JUnit report.
 //!
 //! The link below seems the most "official" spec
 //! <https://www.ibm.com/docs/fr/developer-for-zos/9.1.1?topic=formats-junit-xml-format>
@@ -57,23 +57,39 @@
 mod testcase;
 mod xml;
 use std::fs::File;
+use std::path::Path;
 
 pub use testcase::Testcase;
 
 use crate::report::junit::xml::{Element, XmlDocument};
-use crate::report::Error;
+use crate::report::ReportError;
 
 /// Creates a JUnit from a list of `testcases`.
-pub fn write_report(filename: &str, testcases: &[Testcase]) -> Result<(), Error> {
-    // If there is an existing JUnit report, we parses it to insert a new testsuite.
-    let path = std::path::Path::new(&filename);
-    let mut root = if path.exists() {
-        let file = match File::open(path) {
+pub fn write_report(filename: &Path, testcases: &[Testcase]) -> Result<(), ReportError> {
+    // We ensure that parent folder is created.
+    if let Some(parent) = filename.parent() {
+        match std::fs::create_dir_all(parent) {
+            Ok(_) => {}
+            Err(err) => {
+                return Err(ReportError::from_error(
+                    err,
+                    filename,
+                    "Issue writing Junit report",
+                ))
+            }
+        }
+    }
+
+    // If there is an existing JUnit report, we parse it to insert a new testsuite.
+    let mut root = if filename.exists() {
+        let file = match File::open(filename) {
             Ok(s) => s,
-            Err(why) => {
-                return Err(Error {
-                    message: format!("Issue reading {} to string to {:?}", path.display(), why),
-                });
+            Err(e) => {
+                return Err(ReportError::from_error(
+                    e,
+                    filename,
+                    "Issue reading JUnit report",
+                ))
             }
         };
         let doc = XmlDocument::parse(file).unwrap();
@@ -89,16 +105,18 @@ pub fn write_report(filename: &str, testcases: &[Testcase]) -> Result<(), Error>
     let file = match File::create(filename) {
         Ok(f) => f,
         Err(e) => {
-            return Err(Error {
-                message: format!("Failed to produce JUnit report: {e:?}"),
-            });
+            return Err(ReportError::from_error(
+                e,
+                filename,
+                "Issue writing JUnit report",
+            ))
         }
     };
     match doc.write(file) {
         Ok(_) => Ok(()),
-        Err(e) => Err(Error {
-            message: format!("Failed to produce Junit report: {e:?}"),
-        }),
+        Err(e) => Err(ReportError::from_string(&format!(
+            "Failed to produce Junit report: {e:?}"
+        ))),
     }
 }
 
@@ -128,92 +146,91 @@ fn create_testsuite(testcases: &[Testcase]) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use hurl_core::ast::{Pos, SourceInfo};
+    use std::time::Duration;
 
+    use hurl_core::ast::SourceInfo;
+    use hurl_core::input::Input;
+    use hurl_core::reader::Pos;
+
+    use crate::http::HttpError;
     use crate::report::junit::xml::XmlDocument;
     use crate::report::junit::{create_testsuite, Testcase};
-    use crate::runner::{EntryResult, Error, HurlResult, RunnerError};
+    use crate::runner::{EntryResult, HurlResult, RunnerError, RunnerErrorKind};
 
     #[test]
     fn create_junit_report() {
         let content = "GET http://localhost:8000/not_found\n\
                        HTTP/1.0 200";
-        let filename = "-";
+        let filename = Input::new("test.hurl");
         let mut testcases = vec![];
         let res = HurlResult {
-            entries: vec![],
-            time_in_ms: 230,
+            duration: Duration::from_millis(124),
             success: true,
-            cookies: vec![],
-            timestamp: 1,
+            ..Default::default()
         };
-        let tc = Testcase::from(&res, content, filename);
+        let tc = Testcase::from(&res, content, &filename);
         testcases.push(tc);
 
         let res = HurlResult {
             entries: vec![EntryResult {
                 entry_index: 1,
-                calls: vec![],
-                captures: vec![],
-                asserts: vec![],
-                errors: vec![Error::new(
+                source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 35)),
+                errors: vec![RunnerError::new(
                     SourceInfo::new(Pos::new(2, 10), Pos::new(2, 13)),
-                    RunnerError::AssertStatus {
+                    RunnerErrorKind::AssertStatus {
                         actual: "404".to_string(),
                     },
                     true,
                 )],
-                time_in_ms: 0,
-                compressed: false,
+                ..Default::default()
             }],
-            time_in_ms: 230,
+            duration: Duration::from_millis(200),
             success: true,
-            cookies: vec![],
-            timestamp: 1,
+            ..Default::default()
         };
-        let tc = Testcase::from(&res, content, filename);
+        let tc = Testcase::from(&res, content, &filename);
         testcases.push(tc);
 
         let res = HurlResult {
             entries: vec![EntryResult {
                 entry_index: 1,
-                calls: vec![],
-                captures: vec![],
-                asserts: vec![],
-                errors: vec![Error::new(
+                source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 35)),
+                errors: vec![RunnerError::new(
                     SourceInfo::new(Pos::new(1, 5), Pos::new(1, 19)),
-                    RunnerError::HttpConnection("(6) Could not resolve host: unknown".to_string()),
+                    RunnerErrorKind::Http(HttpError::Libcurl {
+                        code: 6,
+                        description: "Could not resolve host: unknown".to_string(),
+                    }),
                     false,
                 )],
-                time_in_ms: 0,
-                compressed: false,
+                ..Default::default()
             }],
-            time_in_ms: 230,
+            duration: Duration::from_millis(230),
             success: true,
-            cookies: vec![],
-            timestamp: 1,
+            ..Default::default()
         };
-        let tc = Testcase::from(&res, content, filename);
+        let tc = Testcase::from(&res, content, &filename);
         testcases.push(tc);
 
         let suite = create_testsuite(&testcases);
         let doc = XmlDocument::new(suite);
         assert_eq!(
             doc.to_string().unwrap(),
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
             <testsuite tests=\"3\" errors=\"1\" failures=\"1\">\
-                <testcase id=\"-\" name=\"-\" time=\"0.230\" />\
-                <testcase id=\"-\" name=\"-\" time=\"0.230\">\
+                <testcase id=\"test.hurl\" name=\"test.hurl\" time=\"0.124\" />\
+                <testcase id=\"test.hurl\" name=\"test.hurl\" time=\"0.200\">\
                     <failure>Assert status code\n  \
-                    --> -:2:10\n   \
-                      |\n \
+                    --&gt; test.hurl:2:10\n   \
+                      |\n   \
+                      | GET http://localhost:8000/not_found\n \
                     2 | HTTP/1.0 200\n   \
-                      |          ^^^ actual value is &lt;404>\n   \
+                      |          ^^^ actual value is &lt;404&gt;\n   \
                       |\
                     </failure>\
                 </testcase>\
-                <testcase id=\"-\" name=\"-\" time=\"0.230\">\
-                    <error>HTTP connection\n  --> -:1:5\n   |\n 1 | GET http://localhost:8000/not_found\n   |     ^^^^^^^^^^^^^^ (6) Could not resolve host: unknown\n   |\
+                <testcase id=\"test.hurl\" name=\"test.hurl\" time=\"0.230\">\
+                    <error>HTTP connection\n  --&gt; test.hurl:1:5\n   |\n 1 | GET http://localhost:8000/not_found\n   |     ^^^^^^^^^^^^^^ (6) Could not resolve host: unknown\n   |\
                     </error>\
                 </testcase>\
             </testsuite>"

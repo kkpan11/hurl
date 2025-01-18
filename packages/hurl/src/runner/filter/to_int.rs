@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,44 +15,44 @@
  * limitations under the License.
  *
  */
-
 use hurl_core::ast::SourceInfo;
 
-use crate::runner::{Error, Number, RunnerError, Value};
+use crate::runner::{Number, RunnerError, RunnerErrorKind, Value};
 
+/// Converts `value` to an integer.
 pub fn eval_to_int(
     value: &Value,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::Number(Number::Integer(v)) => Ok(Some(Value::Number(Number::Integer(*v)))),
         Value::Number(Number::Float(v)) => Ok(Some(Value::Number(Number::Integer(*v as i64)))),
         Value::String(v) => match v.parse::<i64>() {
             Ok(i) => Ok(Some(Value::Number(Number::Integer(i)))),
             _ => {
-                let inner = RunnerError::FilterInvalidInput(value.display());
-                Err(Error::new(source_info, inner, assert))
+                let kind = RunnerErrorKind::FilterInvalidInput(value.repr());
+                Err(RunnerError::new(source_info, kind, assert))
             }
         },
         v => {
-            let inner = RunnerError::FilterInvalidInput(v.display());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.repr());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo};
+    use hurl_core::reader::Pos;
 
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::{Number, RunnerError, Value};
-    use hurl_core::ast::{Filter, FilterValue, Pos, SourceInfo};
-    use std::collections::HashMap;
+    use crate::runner::{Number, RunnerErrorKind, Value, VariableSet};
 
     #[test]
-    pub fn eval_filter_to_int() {
-        let variables = HashMap::new();
+    fn eval_filter_to_int() {
+        let variables = VariableSet::new();
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
             value: FilterValue::ToInt,
@@ -93,8 +93,8 @@ pub mod tests {
     }
 
     #[test]
-    pub fn eval_filter_to_int_error() {
-        let variables = HashMap::new();
+    fn eval_filter_to_int_error() {
+        let variables = VariableSet::new();
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 1)),
             value: FilterValue::ToInt,
@@ -108,15 +108,15 @@ pub mod tests {
         .err()
         .unwrap();
         assert_eq!(
-            err.inner,
-            RunnerError::FilterInvalidInput("string <123x>".to_string())
+            err.kind,
+            RunnerErrorKind::FilterInvalidInput("string <123x>".to_string())
         );
         let err = eval_filter(&filter, &Value::Bool(true), &variables, false)
             .err()
             .unwrap();
         assert_eq!(
-            err.inner,
-            RunnerError::FilterInvalidInput("bool <true>".to_string())
+            err.kind,
+            RunnerErrorKind::FilterInvalidInput("boolean <true>".to_string())
         );
     }
 }

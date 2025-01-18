@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,8 @@
  * limitations under the License.
  *
  */
-
-use error::Error;
-use reader::Reader;
-
-#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Pos {
-    pub line: usize,
-    pub column: usize,
-}
-
-pub type ParseResult<T> = Result<T, Error>;
-pub type ParseFunc<T> = fn(&mut Reader) -> ParseResult<T>;
-
 pub use self::parse::parse;
 
-mod combinators;
 mod error;
 mod parse;
 mod primitives;
-mod reader;

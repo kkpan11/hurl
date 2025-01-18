@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,8 +54,11 @@ pub struct Predicate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PredicateFunc {
     KeyExist,
+    EqualBool(bool),
     EqualString(String),
+    NotEqualString(String),
     Equal(Number),
+    NotEqual(Number),
     GreaterThan(Number),
     GreaterThanOrEqual(Number),
     LessThan(Number),

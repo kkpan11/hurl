@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,13 +23,14 @@ use std::env;
 use std::path::PathBuf;
 
 use clap::ArgMatches;
+use hurl_core::input::Input;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
     pub check: bool,
     pub color: bool,
     pub in_place: bool,
-    pub input_files: Vec<String>,
+    pub input_files: Vec<Input>,
     pub input_format: InputFormat,
     pub output_file: Option<PathBuf>,
     pub output_format: OutputFormat,
@@ -72,7 +73,6 @@ pub fn parse() -> Result<Options, OptionsError> {
         .about("Format Hurl files")
         .arg(commands::check())
         .arg(commands::color())
-        .arg(commands::format())
         .arg(commands::in_place())
         .arg(commands::input_files())
         .arg(commands::input_format())

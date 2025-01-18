@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,29 +18,56 @@
 
 use hurl_core::ast::SourceInfo;
 
-use crate::runner::{Error, RunnerError, Value};
+use crate::runner::{RunnerError, RunnerErrorKind, Value};
 
+/// Replaces `%xx` URL escapes in `value` with their single-character equivalent.
 pub fn eval_url_decode(
     value: &Value,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::String(value) => {
             match percent_encoding::percent_decode(value.as_bytes()).decode_utf8() {
                 Ok(decoded) => Ok(Some(Value::String(decoded.to_string()))),
                 Err(_) => {
-                    let inner = RunnerError::FilterInvalidInput("Invalid UTF-8 stream".to_string());
-                    Err(Error::new(source_info, inner, assert))
+                    let kind =
+                        RunnerErrorKind::FilterInvalidInput("Invalid UTF-8 stream".to_string());
+                    Err(RunnerError::new(source_info, kind, assert))
                 }
             }
         }
         v => {
-            let inner = RunnerError::FilterInvalidInput(v._type());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.kind().to_string());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {}
+mod tests {
+    use crate::runner::filter::eval::eval_filter;
+    use crate::runner::{Value, VariableSet};
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo};
+    use hurl_core::reader::Pos;
+
+    #[test]
+    fn eval_filter_url_decode() {
+        let variables = VariableSet::new();
+        let filter = Filter {
+            source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
+            value: FilterValue::UrlDecode,
+        };
+        assert_eq!(
+            eval_filter(
+                &filter,
+                &Value::String("https://mozilla.org/?x=%D1%88%D0%B5%D0%BB%D0%BB%D1%8B".to_string()),
+                &variables,
+                false,
+            )
+            .unwrap()
+            .unwrap(),
+            Value::String("https://mozilla.org/?x=шеллы".to_string())
+        );
+    }
+}

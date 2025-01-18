@@ -3,7 +3,7 @@
 ## Definition
 
 [Captures] and [asserts] share a common structure: query. A query is used to extract data from an HTTP response; this data 
-can come from the HTTP response body, the HTTP response headers or from the HTTP meta-informations (like `duration` for instance)...
+can come from the HTTP response body, the HTTP response headers or from the HTTP meta-information (like `duration` for instance)...
 
 In this example, the query __`jsonpath "$.books[0].name"`__ is used in a capture to save data and in an assert to test 
 the HTTP response body.
@@ -47,7 +47,6 @@ __can be chained__, allowing for fine-grained data extraction.
 
 ```hurl
 GET https://example.org/api
-
 HTTP 200
 [Captures]
 name: jsonpath "$user.id" replace /\d/ "x"
@@ -66,7 +65,6 @@ Counts the number of items in a collection.
 
 ```hurl
 GET https://example.org/api
-
 HTTP 200
 [Asserts]
 jsonpath "$.books" count == 12
@@ -78,7 +76,6 @@ Returns the number of days between now and a date in the future.
 
 ```hurl
 GET https://example.org
-
 HTTP 200
 [Asserts]
 certificate "Expire-Date" daysAfterNow > 15
@@ -90,7 +87,6 @@ Returns the number of days between now and a date in the past.
 
 ```hurl
 GET https://example.org
-
 HTTP 200
 [Asserts]
 certificate "Start-Date" daysBeforeNow < 100
@@ -103,8 +99,7 @@ Decode bytes to string using encoding.
 ```hurl
 # The 'Content-Type' HTTP response header does not precise the charset 'gb2312'
 # so body must be decoded explicitly by Hurl before processing any text based assert
-GET https://exapple.org/hello_china
-
+GET https://example.org/hello_china
 HTTP 200
 [Asserts]
 header "Content-Type" == "text/html"
@@ -118,7 +113,6 @@ Formats a date to a string given [a specification format].
 
 ```hurl
 GET https://example.org
-
 HTTP 200
 [Asserts]
 cookie "LSID[Expires]" format "%a, %d %b %Y %H:%M:%S" == "Wed, 13 Jan 2021 22:23:01"
@@ -130,7 +124,6 @@ Converts the characters `&`, `<` and `>` to HTML-safe sequence.
 
 ```hurl
 GET https://example.org/api
-
 HTTP 200
 [Asserts]
 jsonpath "$.text" htmlEscape == "a &gt; b"
@@ -142,11 +135,25 @@ Converts all named and numeric character references (e.g. `&gt;`, `&#62;`, `&#x3
 
 ```hurl
 GET https://example.org/api
-
 HTTP 200
 [Asserts]
 jsonpath "$.escaped_html[1]" htmlUnescape == "Foo © bar 𝌆"
 ```
+
+### jsonpath 
+
+Evaluates a [JSONPath] expression.
+
+```hurl
+GET https://example.org/api
+HTTP 200
+[Captures]
+books: xpath "string(//body/@data-books)" 
+[Asserts]
+variable "books" jsonpath "$[0].name" == "Dune"
+variable "books" jsonpath "$[0].author" == "Franck Herbert"
+```
+
 
 ### nth
 
@@ -154,7 +161,6 @@ Returns the element from a collection at a zero-based index.
 
 ```hurl
 GET https://example.org/api
-
 HTTP 200
 [Asserts]
 jsonpath "$.books" nth 2 == "Children of Dune"
@@ -166,7 +172,6 @@ Extracts regex capture group. Pattern must have at least one capture group.
 
 ```hurl
 GET https://example.org/foo
-
 HTTP 200
 [Captures]
 param1: header "header1"
@@ -180,7 +185,6 @@ Replaces all occurrences of old string with new string.
 
 ```hurl
 GET https://example.org/foo
-
 HTTP 200
 [Captures]
 url: jsonpath "$.url" replace "http://" "https://"
@@ -194,7 +198,6 @@ Splits to a list of strings around occurrences of the specified delimiter.
 
 ```hurl
 GET https://example.org/foo
-
 HTTP 200
 [Asserts]
 jsonpath "$.ips" split ", " count == 3
@@ -206,7 +209,6 @@ Converts a string to a date given [a specification format].
 
 ```hurl
 GET https:///example.org
-
 HTTP 200
 [Asserts]
 header "Expires" toDate "%a, %d %b %Y %H:%M:%S GMT" daysBeforeNow > 1000
@@ -217,7 +219,6 @@ ISO 8601 / RFC 3339 date and time format have shorthand format `%+`:
 
 ```hurl
 GET https://example.org/api/books
-
 HTTP 200
 [Asserts]
 jsonpath "$.published" == "2023-01-23T18:25:43.511Z"
@@ -225,6 +226,16 @@ jsonpath "$.published" toDate "%Y-%m-%dT%H:%M:%S%.fZ" format "%A" == "Monday"
 jsonpath "$.published" toDate "%+" format "%A" == "Monday" # %+ can be used to parse ISO 8601 / RFC 3339
 ```
 
+### toFloat
+
+Converts to float number.
+
+```hurl
+GET https://example.org/foo
+HTTP 200
+[Asserts]
+jsonpath "$.pi" toFloat == 3.14
+```
 
 ### toInt
 
@@ -232,7 +243,6 @@ Converts to integer number.
 
 ```hurl
 GET https://example.org/foo
-
 HTTP 200
 [Asserts]
 jsonpath "$.id" toInt == 123
@@ -244,7 +254,6 @@ Replaces %xx escapes with their single-character equivalent.
 
 ```hurl
 GET https://example.org/foo
-
 HTTP 200
 [Asserts]
 jsonpath "$.encoded_url" urlDecode == "https://mozilla.org/?x=шеллы"
@@ -256,7 +265,6 @@ Percent-encodes all the characters which are not included in unreserved chars (s
 
 ```hurl
 GET https://example.org/foo
-
 HTTP 200
 [Asserts]
 jsonpath "$.url" urlEncode == "https%3A//mozilla.org/%3Fx%3D%D1%88%D0%B5%D0%BB%D0%BB%D1%8B"
@@ -268,7 +276,6 @@ Evaluates a [XPath] expression.
 
 ```hurl
 GET https://example.org/hello_gb2312
-
 HTTP 200
 [Asserts]
 bytes decode "gb2312" xpath "string(//body)" == "你好世界"
@@ -280,3 +287,4 @@ bytes decode "gb2312" xpath "string(//body)" == "你好世界"
 [RFC3986]: https://www.rfc-editor.org/rfc/rfc3986
 [a specification format]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 [XPath]: https://en.wikipedia.org/wiki/XPath
+[JSONPath]: https://goessner.net/articles/JsonPath/

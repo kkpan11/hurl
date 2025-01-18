@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,13 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
+use hurl_core::ast::{Placeholder, Template, TemplateElement};
 
-use hurl_core::ast::*;
-
-use crate::runner::error::{Error, RunnerError};
-use crate::runner::Value;
+use crate::runner::error::RunnerError;
+use crate::runner::{expr, VariableSet};
 
 /// Renders to string a `template` given a map of variables.
-pub fn eval_template(
-    template: &Template,
-    variables: &HashMap<String, Value>,
-) -> Result<String, Error> {
+pub fn eval_template(template: &Template, variables: &VariableSet) -> Result<String, RunnerError> {
     let Template { elements, .. } = template;
     let mut value = String::new();
     for elem in elements {
@@ -40,78 +35,46 @@ pub fn eval_template(
 
 fn eval_template_element(
     template_element: &TemplateElement,
-    variables: &HashMap<String, Value>,
-) -> Result<String, Error> {
+    variables: &VariableSet,
+) -> Result<String, RunnerError> {
     match template_element {
         TemplateElement::String { value, .. } => Ok(value.clone()),
-        TemplateElement::Expression(expr) => render_expression(expr, variables),
-    }
-}
-
-pub fn render_expression(expr: &Expr, variables: &HashMap<String, Value>) -> Result<String, Error> {
-    let source_info = expr.variable.source_info;
-    let name = &expr.variable.name;
-    let value = eval_expression(expr, variables)?;
-    if value.is_renderable() {
-        Ok(value.to_string())
-    } else {
-        let inner = RunnerError::UnrenderableVariable {
-            name: name.to_string(),
-            value: value.to_string(),
-        };
-        Err(Error::new(source_info, inner, false))
-    }
-}
-
-pub fn eval_expression(expr: &Expr, variables: &HashMap<String, Value>) -> Result<Value, Error> {
-    let source_info = expr.variable.source_info;
-    let name = &expr.variable.name;
-    match variables.get(name.as_str()) {
-        Some(value) => Ok(value.clone()),
-        _ => {
-            let inner = RunnerError::TemplateVariableNotDefined { name: name.clone() };
-            Err(Error::new(source_info, inner, false))
-        }
-    }
-}
-
-impl Value {
-    pub fn is_renderable(&self) -> bool {
-        matches!(
-            self,
-            Value::Number(_) | Value::Bool(_) | Value::String(_) | Value::Null
-        )
+        TemplateElement::Placeholder(Placeholder { expr, .. }) => expr::render(expr, variables),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use hurl_core::ast::SourceInfo;
+    use hurl_core::ast::{Expr, ExprKind, SourceInfo, Variable, Whitespace};
+    use hurl_core::reader::Pos;
 
     use super::*;
-    use crate::runner::Number;
+    use crate::runner::{Number, RunnerErrorKind, Value};
 
     fn template_element_expression() -> TemplateElement {
         // {{name}}
-        TemplateElement::Expression(Expr {
+        TemplateElement::Placeholder(Placeholder {
             space0: Whitespace {
                 value: String::new(),
                 source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 3)),
             },
-            variable: Variable {
-                name: "name".to_string(),
+            expr: Expr {
+                kind: ExprKind::Variable(Variable {
+                    name: "name".to_string(),
+                    source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 7)),
+                }),
                 source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 7)),
             },
             space1: Whitespace {
                 value: String::new(),
-                source_info: SourceInfo::new(Pos::new(1, 7), Pos::new(1, 7)),
+                source_info: SourceInfo::new(Pos::new(1, 3), Pos::new(1, 7)),
             },
         })
     }
 
     #[test]
     fn test_template_element() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         assert_eq!(
             eval_template_element(
                 &TemplateElement::String {
@@ -124,8 +87,10 @@ mod tests {
             "World".to_string()
         );
 
-        let mut variables = HashMap::new();
-        variables.insert("name".to_string(), Value::String("World".to_string()));
+        let mut variables = VariableSet::new();
+        variables
+            .insert("name".to_string(), Value::String("World".to_string()))
+            .unwrap();
         assert_eq!(
             eval_template_element(&template_element_expression(), &variables).unwrap(),
             "World".to_string()
@@ -134,14 +99,16 @@ mod tests {
 
     #[test]
     fn test_template_element_error() {
-        let mut variables = HashMap::new();
-        variables.insert(
-            "name".to_string(),
-            Value::List(vec![
-                Value::Number(Number::Integer(1)),
-                Value::Number(Number::Integer(2)),
-            ]),
-        );
+        let mut variables = VariableSet::new();
+        variables
+            .insert(
+                "name".to_string(),
+                Value::List(vec![
+                    Value::Number(Number::Integer(1)),
+                    Value::Number(Number::Integer(2)),
+                ]),
+            )
+            .unwrap();
         let error = eval_template_element(&template_element_expression(), &variables)
             .err()
             .unwrap();
@@ -150,36 +117,10 @@ mod tests {
             SourceInfo::new(Pos::new(1, 3), Pos::new(1, 7))
         );
         assert_eq!(
-            error.inner,
-            RunnerError::UnrenderableVariable {
-                name: "name".to_string(),
+            error.kind,
+            RunnerErrorKind::UnrenderableExpression {
                 value: "[1,2]".to_string()
             }
         );
-    }
-
-    #[test]
-    fn test_render_expression() {
-        let mut variables = HashMap::new();
-        variables.insert("status".to_string(), Value::Bool(true));
-        let expr = Expr {
-            space0: Whitespace {
-                value: "".to_string(),
-                source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
-            },
-            variable: Variable {
-                name: "status".to_string(),
-                source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
-            },
-            space1: Whitespace {
-                value: "".to_string(),
-                source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
-            },
-        };
-        assert_eq!(
-            eval_expression(&expr, &variables).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(render_expression(&expr, &variables).unwrap(), "true");
     }
 }

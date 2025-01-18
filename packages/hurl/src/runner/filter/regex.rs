@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,22 +15,21 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
-
 use hurl_core::ast::{RegexValue, SourceInfo};
 
 use crate::runner::regex::eval_regex_value;
+use crate::runner::{RunnerError, RunnerErrorKind, Value, VariableSet};
 
-use crate::runner::{Error, RunnerError, Value};
-
+/// Extracts `regex` capture group from `value`.
+/// Pattern must have at least one capture group.
 pub fn eval_regex(
     value: &Value,
-    regex_value: &RegexValue,
-    variables: &HashMap<String, Value>,
+    regex: &RegexValue,
+    variables: &VariableSet,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
-    let re = eval_regex_value(regex_value, variables)?;
+) -> Result<Option<Value>, RunnerError> {
+    let re = eval_regex_value(regex, variables)?;
     match value {
         Value::String(s) => match re.captures(s.as_str()) {
             Some(captures) => match captures.get(1) {
@@ -40,25 +39,26 @@ pub fn eval_regex(
             None => Ok(None),
         },
         v => {
-            let inner = RunnerError::FilterInvalidInput(v._type());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.kind().to_string());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
-    use std::collections::HashMap;
+mod tests {
+    use hurl_core::ast::{
+        Filter, FilterValue, RegexValue, SourceInfo, Template, TemplateElement, Whitespace,
+    };
+    use hurl_core::reader::Pos;
 
     use crate::runner::filter::eval::eval_filter;
-    use crate::runner::{RunnerError, Value};
-    use hurl_core::ast::{
-        Filter, FilterValue, Pos, RegexValue, SourceInfo, Template, TemplateElement, Whitespace,
-    };
+    use crate::runner::{RunnerErrorKind, Value, VariableSet};
+
     #[test]
     fn eval_filter_regex() {
         // regex "Hello (.*)!"
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         let whitespace = Whitespace {
             value: String::new(),
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
@@ -97,14 +97,14 @@ pub mod tests {
             SourceInfo::new(Pos::new(1, 1), Pos::new(1, 20))
         );
         assert_eq!(
-            error.inner,
-            RunnerError::FilterInvalidInput("boolean".to_string())
+            error.kind,
+            RunnerErrorKind::FilterInvalidInput("boolean".to_string())
         );
     }
 
     #[test]
     fn eval_filter_invalid_regex() {
-        let variables = HashMap::new();
+        let variables = VariableSet::new();
         let whitespace = Whitespace {
             value: String::new(),
             source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
@@ -135,6 +135,6 @@ pub mod tests {
             error.source_info,
             SourceInfo::new(Pos::new(1, 7), Pos::new(1, 20))
         );
-        assert_eq!(error.inner, RunnerError::InvalidRegex);
+        assert_eq!(error.kind, RunnerErrorKind::InvalidRegex);
     }
 }

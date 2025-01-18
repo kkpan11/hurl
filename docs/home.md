@@ -15,7 +15,6 @@ Hurl makes it easy to work with <b>HTML</b> content, <b>REST / SOAP / GraphQL</b
 ```hurl
 # Get home:
 GET https://example.org
-
 HTTP 200
 [Captures]
 csrf_token: xpath "string(//meta[@name='_csrf_token']/@content)"
@@ -52,7 +51,6 @@ POST https://example.org/api/tests
     "id": "4568",
     "evaluate": true
 }
-
 HTTP 200
 [Asserts]
 header "X-Frame-Options" == "SAMEORIGIN"
@@ -65,7 +63,6 @@ jsonpath "$.id" matches /\d{4}/     # Check the format of the id
 
 ```hurl
 GET https://example.org
-
 HTTP 200
 [Asserts]
 xpath "normalize-space(//head/title)" == "Hello world!"
@@ -108,7 +105,6 @@ Hurl can also be used to test the <b>performance</b> of HTTP endpoints
 
 ```hurl
 GET https://example.org/api/v1/pets
-
 HTTP 200
 [Asserts]
 duration < 1000  # Duration in ms
@@ -118,7 +114,6 @@ And check response bytes
 
 ```hurl
 GET https://example.org/data.tar.gz
-
 HTTP 200
 [Asserts]
 sha256 == hex,039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81;
@@ -131,13 +126,13 @@ Finally, Hurl is easy to <b>integrate in CI/CD</b>, with text, JUnit, TAP and HT
         <source srcset="/docs/assets/img/home-waterfall-light.avif" type="image/avif">
         <source srcset="/docs/assets/img/home-waterfall-light.webp" type="image/webp">
         <source srcset="/docs/assets/img/home-waterfall-light.png" type="image/png">
-        <img class="light-img u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/home-waterfall-light.png" width="480" alt="HTML report"/>
+        <img class="u-theme-light u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/home-waterfall-light.png" width="480" alt="HTML report"/>
     </picture>
     <picture>
         <source srcset="/docs/assets/img/home-waterfall-dark.avif" type="image/avif">
         <source srcset="/docs/assets/img/home-waterfall-dark.webp" type="image/webp">
         <source srcset="/docs/assets/img/home-waterfall-dark.png" type="image/png">
-        <img class="dark-img u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/home-waterfall-dark.png" width="480" alt="HTML report"/>
+        <img class="u-theme-dark u-drop-shadow u-border u-max-width-100" src="/docs/assets/img/home-waterfall-dark.png" width="480" alt="HTML report"/>
     </picture>
 </div>
 
@@ -179,7 +174,7 @@ HTTP 200
 
 [Tutorial]
 
-[Documentation]
+[Documentation] (download [HTML], [PDF], [Markdown]) 
 
 [GitHub]
 
@@ -196,3 +191,6 @@ HTTP 200
 [GitHub]: https://github.com/Orange-OpenSource/hurl
 [libcurl]: https://curl.se/libcurl/
 [star Hurl on GitHub]: https://github.com/Orange-OpenSource/hurl/stargazers
+[HTML]: /docs/standalone/hurl-6.0.0.html
+[PDF]: /docs/standalone/hurl-6.0.0.pdf
+[Markdown]: /docs/standalone/hurl-6.0.0.md

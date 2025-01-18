@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@
 //! ```hurl
 //! # Get home:
 //! GET https://example.org
-//!
 //! HTTP 200
 //! [Captures]
 //! csrf_token: xpath "string(//meta[@name='_csrf_token']/@content)"
@@ -44,6 +43,8 @@ pub mod http;
 mod json;
 mod jsonpath;
 pub mod output;
+#[doc(hidden)]
+pub mod parallel;
 pub mod report;
 pub mod runner;
 pub mod util;

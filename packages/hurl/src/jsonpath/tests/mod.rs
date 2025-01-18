@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -251,6 +251,20 @@ fn test_bookstore_path() {
     assert_eq!(
         expr.eval(&bookstore_value()).unwrap(),
         JsonpathResult::Collection(vec![book0_value(), book2_value()])
+    );
+
+    // get all books whose title is not "hamlet".
+    let expr = jsonpath::parse("$..book[?(@.title!='Moby Dick')]").unwrap();
+    assert_eq!(
+        expr.eval(&bookstore_value()).unwrap(),
+        JsonpathResult::Collection(vec![book0_value(), book1_value(), book3_value()])
+    );
+
+    // get all books whose price is not 8.95 (first book)
+    let expr = jsonpath::parse("$..book[?(@.price!=8.95)]").unwrap();
+    assert_eq!(
+        expr.eval(&bookstore_value()).unwrap(),
+        JsonpathResult::Collection(vec![book1_value(), book2_value(), book3_value()])
     );
 
     // All members of JSON structure

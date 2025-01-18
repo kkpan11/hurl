@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,13 @@
  * limitations under the License.
  *
  */
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::ptr;
 use std::time::Duration;
 
 use curl::easy::Easy;
 use curl::Error;
-use curl_sys::{curl_certinfo, curl_off_t, curl_slist, CURLINFO};
+use curl_sys::{curl_certinfo, curl_off_t, curl_slist, CURLINFO, CURLOPT_NETRC_FILE};
 
 /// Some definitions not present in curl-sys
 const CURLINFO_OFF_T: CURLINFO = 0x600000;
@@ -32,6 +32,7 @@ const CURLINFO_CONNECT_TIME_T: CURLINFO = CURLINFO_OFF_T + 52;
 const CURLINFO_PRETRANSFER_TIME_T: CURLINFO = CURLINFO_OFF_T + 53;
 const CURLINFO_STARTTRANSFER_TIME_T: CURLINFO = CURLINFO_OFF_T + 54;
 const CURLINFO_APPCONNECT_TIME_T: CURLINFO = CURLINFO_OFF_T + 56;
+const CURLINFO_CONN_ID: CURLINFO = CURLINFO_OFF_T + 64;
 
 /// Represents certificate information.
 /// `data` has format "name:content";
@@ -41,7 +42,7 @@ pub struct CertInfo {
 }
 
 /// Returns the information of the first certificate in the certificates chain.
-pub fn get_certinfo(easy: &Easy) -> Result<Option<CertInfo>, Error> {
+pub fn cert_info(easy: &Easy) -> Result<Option<CertInfo>, Error> {
     unsafe {
         let mut certinfo = ptr::null_mut::<curl_certinfo>();
         let rc =
@@ -57,6 +58,16 @@ pub fn get_certinfo(easy: &Easy) -> Result<Option<CertInfo>, Error> {
         let slist = *((*certinfo).certinfo.offset(0));
         let data = to_list(slist);
         Ok(Some(CertInfo { data }))
+    }
+}
+
+/// Returns the connection identifier use by this libcurl handle.
+pub fn conn_id(easy: &Easy) -> Result<i64, Error> {
+    unsafe {
+        let conn_id: curl_off_t = 0;
+        let rc = curl_sys::curl_easy_getinfo(easy.raw(), CURLINFO_CONN_ID, &conn_id);
+        cvt(easy, rc)?;
+        Ok(conn_id)
     }
 }
 
@@ -172,6 +183,14 @@ pub fn total_time_t(easy: &mut Easy) -> Result<Duration, Error> {
     getopt_off_t(easy, CURLINFO_TOTAL_TIME_T).map(microseconds_to_duration)
 }
 
+/// Read .netrc information from a file.
+pub fn netrc_file(easy: &mut Easy, filename: &str) -> Result<(), Error> {
+    let filename = CString::new(filename)?;
+    cvt(easy, unsafe {
+        curl_sys::curl_easy_setopt(easy.raw(), CURLOPT_NETRC_FILE, filename.as_ptr())
+    })
+}
+
 /// Converts an instance of libcurl linked list [`curl_slist`] to a vec of [`String`].
 fn to_list(slist: *mut curl_slist) -> Vec<String> {
     let mut data = vec![];
@@ -184,7 +203,7 @@ fn to_list(slist: *mut curl_slist) -> Vec<String> {
             let ret = CStr::from_ptr((*cur).data).to_bytes();
             let value = String::from_utf8_lossy(ret);
             data.push(value.to_string());
-            cur = (*cur).next
+            cur = (*cur).next;
         }
     }
     data

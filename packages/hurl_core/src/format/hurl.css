@@ -9,6 +9,10 @@ code {
     line-height: 1.2rem;
 }
 
+.comment {
+    color: dimgray;
+}
+
 .method {
     color: black;
 }
@@ -21,7 +25,7 @@ code {
     color: black;
 }
 
-.number {
+.number, .boolean, .unit {
     color: blue;
 }
 
@@ -33,54 +37,50 @@ code {
     color: teal;
 }
 
-.filter-type {
+.filter-type, .not, .predicate-type {
     color: darkblue;
 }
 
-.not {
-    color: darkblue;
-}
 
-.predicate-type {
-    color: darkblue;
-}
-
-.string {
+.string, .multiline, .name, .json, .xml, .base64, .hex, .filename, .cookie-value, .regex {
     color: darkgreen;
 }
 
-.multiline {
-    color: darkgreen;
-}
+@media (prefers-color-scheme: dark) {
 
-.comment {
-    color: dimgray;
-}
+    .comment {
+        color: dimgray;
+    }
 
-.name {
-    color: darkgreen;
-}
+    .method {
+        color: orange;
+    }
 
-.json {
-    color: darkgreen;
-}
+    .url {
+        color: cyan;
+    }
 
-.xml {
-    color: darkgreen;
-}
+    .version {
+        color: white;
+    }
 
-.base64 {
-    color: darkgreen;
-}
+    .number, .boolean, .unit {
+        color: dodgerblue;
+    }
 
-.hex {
-    color: darkgreen;
-}
+    .section-header {
+        color: magenta;
+    }
 
-.filename {
-    color: darkgreen;
-}
+    .query-type {
+        color: cyan;
+    }
 
-.cookie-value {
-    color: darkgreen;
+    .filter-type, .not, .predicate-type {
+        color: orange;
+    }
+
+    .string, .multiline, .name, .json, .xml, .base64, .hex, .filename, .cookie-value {
+        color: forestgreen;
+    }
 }

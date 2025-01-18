@@ -2,8 +2,8 @@
 # lint hurl file
 #
 import codecs
-import sys
 import subprocess
+import sys
 
 
 def decode_string(encoded):
@@ -20,7 +20,7 @@ def test(hurl_file):
     cmd = ["hurlfmt", "--check", hurl_file]
     print(" ".join(cmd))
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 1:
+    if result.returncode != 3:
         print(f"return code => expected: 1  actual {result.returncode}")
         sys.exit(1)
 

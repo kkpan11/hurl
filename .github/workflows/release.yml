@@ -13,8 +13,10 @@ concurrency: release
 jobs:
   set-context:
     env:
+      GITHUB_REF: ${{ github.ref_name }}
       GITHUB_CONTEXT: ${{ toJson(github) }}
       GITHUB_TOKEN: ${{ secrets.HURL_BOT_TOKEN }}
+      SET_RELEASE_VERSION: ${{ github.event.inputs.set-release-version }}
     outputs:
       release_version: ${{ steps.set-release-version.outputs.release_version }}
       release_branch: ${{ steps.set-release-branch.outputs.release_branch }}
@@ -23,25 +25,25 @@ jobs:
     steps:
       - name: Check trigger branch
         run: |
-          if [ $(echo "${{ github.ref_name }}" | grep -Ec "^master$|^release/") -eq 1 ] ; then
-            echo "  - ✅ The branch triggering this workflow is ${{ github.ref_name }}."
+          if [ $(echo "${GITHUB_REF}" | grep -Ec "^master$|^release/") -eq 1 ] ; then
+            echo "  - ✅ The branch triggering this workflow is ${GITHUB_REF}."
           else
-            echo "  - ❌ The branch triggering this workflow is ${{ github.ref_name }} instead of master or release/[0-9].[0-9].[0-9]."
+            echo "  - ❌ The branch triggering this workflow is ${GITHUB_REF} instead of master or release/[0-9].[0-9].[0-9]."
             exit 1
           fi
 
       - name: Set release version
         id: set-release-version
         run: |
-          echo "release_version=${{ github.event.inputs.set-release-version }}" | tee -a $GITHUB_OUTPUT
+          echo "release_version=${SET_RELEASE_VERSION}" | tee -a $GITHUB_OUTPUT
 
       - name: Set release branch
         id: set-release-branch
         run: |
-          if [ $(echo "${{ github.ref_name }}" | grep -c "^release/") -eq 1 ] ; then
-            echo "release_branch=${{ github.ref_name }}" | tee -a $GITHUB_OUTPUT
+          if [ $(echo "${GITHUB_REF}" | grep -c "^release/") -eq 1 ] ; then
+            echo "release_branch=${GITHUB_REF}" | tee -a $GITHUB_OUTPUT
           else
-            echo "release_branch=release/${{ github.event.inputs.set-release-version }}" | tee -a $GITHUB_OUTPUT
+            echo "release_branch=release/${SET_RELEASE_VERSION}" | tee -a $GITHUB_OUTPUT
           fi
 
   clean-release:
@@ -53,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Check release pull request existence
         id: check-release-pull-request-existence
@@ -169,7 +171,7 @@ jobs:
     steps:
       - name: Checkout repository
         if: github.ref_name == 'master'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Create release branch
         if: github.ref_name == 'master'
@@ -185,7 +187,7 @@ jobs:
           fi
 
       - name: Checkout new release branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           ref: ${{ needs.set-context.outputs.release_branch }}
 
@@ -218,12 +220,8 @@ jobs:
 
       - name: Update installation doc
         run: |
-          # TODO: create a dedicated check script
-          version_doc="docs/installation.md"
-          old_version=$(grep "apt install" "${version_doc}" | grep "hurl" | cut --delimiter '/' --field 2- | cut --delimiter '_' --field 2)
-          echo "old_version=${old_version}"
-          sed -i "s/${old_version}/${{ needs.set-context.outputs.release_version }}/g" "${version_doc}"
-          grep "${{ needs.set-context.outputs.release_version }}" "${version_doc}"
+          old_version=$(grep -E "^\\$ VERSION=" docs/installation.md | head -1 | cut --delimiter "=" --field 2)
+          sed -i "s/${old_version}/${{ needs.set-context.outputs.release_version }}/g" docs/installation.md
 
       - name: Update man
         run: |
@@ -238,7 +236,7 @@ jobs:
           python3 bin/docs/build_readme.py crates > packages/hurl/README.md
 
       - name: Init git bot context
-        uses: crazy-max/ghaction-import-gpg@v5
+        uses: crazy-max/ghaction-import-gpg@v6.2.0
         with:
           gpg_private_key: ${{ secrets.HURL_BOT_GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.HURL_BOT_GPG_PRIVATE_KEY_PASSPHRASE }}
@@ -264,7 +262,7 @@ jobs:
           fi
 
       - name: Archive artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4.6.0
         if: ${{ always() }}
         with:
           name: release-changelog
@@ -283,9 +281,12 @@ jobs:
 
   deliver-github-release:
     env:
+      GITHUB_REF: ${{ github.ref_name }}
+      GITHUB_OWNER: ${{ github.repository_owner }}
+      GITHUB_REPO_NAME: ${{ github.event.repository.name }}
       GITHUB_CONTEXT: ${{ toJson(github) }}
       GITHUB_TOKEN: ${{ secrets.HURL_BOT_TOKEN }}
-      REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.set-context.outputs.release_version }}
     needs:
       - set-context
       - clean-release
@@ -295,12 +296,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout new release branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           ref: ${{ needs.set-context.outputs.release_branch }}
 
       - name: Init git bot context
-        uses: crazy-max/ghaction-import-gpg@v5
+        uses: crazy-max/ghaction-import-gpg@v6.2.0
         with:
           gpg_private_key: ${{ secrets.HURL_BOT_GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.HURL_BOT_GPG_PRIVATE_KEY_PASSPHRASE }}
@@ -309,52 +310,103 @@ jobs:
           git_user_signingkey: true
           git_commit_gpgsign: true
 
-      - uses: actions/download-artifact@master
+      - uses: actions/download-artifact@v4.1.8
         with:
           path: artifacts
 
       - name: Push tag
         run: |
-          git tag -a ${{ needs.set-context.outputs.release_version }} -m "Release ${{ needs.set-context.outputs.release_version }}"
+          git tag -a "${RELEASE_VERSION}" -m "Release ${RELEASE_VERSION}"
           git tag -n
           git push --tags && git_exit_code=0 || git_exit_code=$?
           if [ ${git_exit_code} -eq 0 ] ; then
-            echo "  - ✅ ${{ needs.set-context.outputs.release_version }} tag created."
+            echo "  - ✅ ${RELEASE_VERSION} tag created."
             git fetch
           else
-            echo "  - ❌ A problem occurs when attempting to create ${{ needs.set-context.outputs.release_version }} tag."
+            echo "  - ❌ A problem occurs when attempting to create ${RELEASE_VERSION} tag."
             exit 1
           fi
+
+      - name: Create sha256sums
+        run: |
+            bin/release/sha256sum.sh --write \
+            artifacts/release-deb-x64-artifacts/hurl_"${RELEASE_VERSION}"_amd64.deb \
+            artifacts/release-generic-linux-x64-artifacts/hurl-"${RELEASE_VERSION}"-x86_64-unknown-linux-gnu.tar.gz \
+            artifacts/release-generic-linux-aarch64-artifacts/hurl-"${RELEASE_VERSION}"-aarch64-unknown-linux-gnu.tar.gz \
+            artifacts/release-macos-x64-artifacts/hurl-"${RELEASE_VERSION}"-x86_64-apple-darwin.tar.gz \
+            artifacts/release-macos-aarch64-artifacts/hurl-"${RELEASE_VERSION}"-aarch64-apple-darwin.tar.gz \
+            artifacts/release-windows-x64-artifacts/hurl-"${RELEASE_VERSION}"-x86_64-pc-windows-msvc-installer.exe \
+            artifacts/release-windows-x64-artifacts/hurl-"${RELEASE_VERSION}"-x86_64-pc-windows-msvc.zip
+            echo "file,sha256" > release-"${RELEASE_VERSION}".sha256.csv
+            find ./artifacts -name "*sha256" | xargs -I FILE sh -c 'echo "https://github.com/${GITHUB_OWNER}/${GITHUB_REPO_NAME}/releases/download/${RELEASE_VERSION}/$(basename FILE),$(cat FILE)"' >> release-"${RELEASE_VERSION}".sha256.csv
+
+      - name: Archive sha256 artifacts
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: release-sha256-csv
+          path: release-${{ needs.set-context.outputs.release_version }}.sha256.csv
+
 
       - name: Deliver release
         run: |
-          cat CHANGELOG.md | python3 bin/release/changelog_extract.py ${{ needs.set-context.outputs.release_version }} > release_changelog.md
-          gh release create ${{ needs.set-context.outputs.release_version }} \
-            --target ${{ needs.set-context.outputs.release_branch }} \
-            --notes-file release_changelog.md \
-            --title ${{ needs.set-context.outputs.release_version }} \
-            --draft \
-            artifacts/release-deb-x64-artifacts/hurl_"${{ needs.set-context.outputs.release_version }}"_amd64.deb \
-            artifacts/release-generic-linux-x64-artifacts/hurl-"${{ needs.set-context.outputs.release_version }}"-x86_64-unknown-linux-gnu.tar.gz \
-            artifacts/release-macos-x64-artifacts/hurl-"${{ needs.set-context.outputs.release_version }}"-x86_64-apple-darwin.tar.gz \
-            artifacts/release-windows-x64-artifacts/hurl-"${{ needs.set-context.outputs.release_version }}"-x86_64-pc-windows-msvc-installer.exe \
-            artifacts/release-windows-x64-artifacts/hurl-"${{ needs.set-context.outputs.release_version }}"-x86_64-pc-windows-msvc.zip && gh_exit_code=0 || gh_exit_code=$?
-          if [ ${gh_exit_code} -eq 0 ] ; then
-            echo "  - ✅ GitHub release ${{ needs.set-context.outputs.release_version }} created."
-          else
-            echo "  - ❌ A problem occurs when attempting to create GitHub release ${{ needs.set-context.outputs.release_version }}."
-            exit 1
-          fi
+          echo "::group::Extract CHANGELOG"
+            ls -l CHANGELOG.md
+            cat CHANGELOG.md | python3 bin/release/changelog_extract.py ${{ needs.set-context.outputs.release_version }} > release_changelog.md
+            ls -l release_changelog.md
+            cat release_changelog.md
+          echo "::endgroup::"
+          echo "::group::List artifacts"
+            ls -l \
+                artifacts/release-deb-x64-artifacts/* \
+                artifacts/release-generic-linux-x64-artifacts/* \
+                artifacts/release-generic-linux-aarch64-artifacts/* \
+                artifacts/release-macos-x64-artifacts/* \
+                artifacts/release-macos-aarch64-artifacts/* \
+                artifacts/release-windows-x64-artifacts/*
+          echo "::endgroup::"
+          echo "::group::Deliver Release"
+            gh release create ${{ needs.set-context.outputs.release_version }} \
+                --target ${{ needs.set-context.outputs.release_branch }} \
+                --notes-file release_changelog.md \
+                --title ${{ needs.set-context.outputs.release_version }} \
+                --draft \
+                artifacts/release-deb-x64-artifacts/hurl_${{ needs.set-context.outputs.release_version }}_amd64.deb \
+                artifacts/release-deb-x64-artifacts/hurl_${{ needs.set-context.outputs.release_version }}_amd64.deb.sha256 \
+                artifacts/release-generic-linux-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-unknown-linux-gnu.tar.gz \
+                artifacts/release-generic-linux-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-unknown-linux-gnu.tar.gz.sha256 \
+                artifacts/release-generic-linux-aarch64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-aarch64-unknown-linux-gnu.tar.gz \
+                artifacts/release-generic-linux-aarch64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-aarch64-unknown-linux-gnu.tar.gz.sha256 \
+                artifacts/release-macos-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-apple-darwin.tar.gz \
+                artifacts/release-macos-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-apple-darwin.tar.gz.sha256 \
+                artifacts/release-macos-aarch64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-aarch64-apple-darwin.tar.gz \
+                artifacts/release-macos-aarch64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-aarch64-apple-darwin.tar.gz.sha256 \
+                artifacts/release-windows-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-pc-windows-msvc-installer.exe \
+                artifacts/release-windows-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-pc-windows-msvc-installer.exe.sha256 \
+                artifacts/release-windows-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-pc-windows-msvc.zip \
+                artifacts/release-windows-x64-artifacts/hurl-${{ needs.set-context.outputs.release_version }}-x86_64-pc-windows-msvc.zip.sha256 && gh_exit_code=0 || gh_exit_code=$?
+            if [ ${gh_exit_code} -eq 0 ] ; then
+              echo "  - ✅ GitHub release ${{ needs.set-context.outputs.release_version }} created."
+            else
+               echo "  - ❌ A problem occurs when attempting to create GitHub release ${{ needs.set-context.outputs.release_version }}."
+               exit 1
+            fi
+          echo "::endgroup::"
+
+      - name: Check sha256 for published packages
+        run: |
+          .github/workflows/bin/check_release_assets_sha.sh \
+              --release ${{ needs.set-context.outputs.release_version }} \
+              --github-repo "${{ github.repository }}" \
+              --github-token $GITHUB_TOKEN
 
       - name: Create new pull request
         run: |
-          GITHUB_TOKEN=${{ secrets.HURL_BOT_TOKEN }}
           {
           echo "⚠ This is a GitHub releasing PR."
           echo "- Please use \`/accept\` as usual then run the \`update-branch-version\` github workflow if you want to automatically update master branch to next SNAPSHOT version"
           } > file-body.txt
           gh pr create \
-            --title "Merge GitHub ${{ needs.set-context.outputs.release_branch }} into ${{ github.ref_name }}" \
+            --title "Merge GitHub ${{ needs.set-context.outputs.release_branch }} into ${GITHUB_REF}" \
             --body-file file-body.txt \
             --base master \
             --label bot && gh_exit_code=0 || gh_exit_code=$?

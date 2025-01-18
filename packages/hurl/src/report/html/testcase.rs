@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,74 +15,81 @@
  * limitations under the License.
  *
  */
-use std::fs::File;
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 
+use crate::runner::{EntryResult, HurlResult, RunnerError};
+use hurl_core::ast::SourceInfo;
+use hurl_core::input::Input;
 use hurl_core::parser;
 use uuid::Uuid;
 
-use crate::runner::{EntryResult, Error, HurlResult};
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Testcase {
+    /// Unique identifier of this testcase.
     pub id: String,
+    /// Source file name.
     pub filename: String,
     pub success: bool,
     pub time_in_ms: u128,
-    pub errors: Vec<Error>,
+    /// The runtime errors, and the source information of the entry throwing this error.
+    pub errors: Vec<(RunnerError, SourceInfo)>,
     pub timestamp: i64,
 }
 
 impl Testcase {
     /// Creates an HTML testcase.
-    pub fn from(hurl_result: &HurlResult, filename: &str) -> Testcase {
+    pub fn from(hurl_result: &HurlResult, filename: &Input) -> Testcase {
         let id = Uuid::new_v4();
-        let errors = hurl_result.errors().into_iter().cloned().collect();
+        let errors = hurl_result
+            .errors()
+            .into_iter()
+            .map(|(error, entry_src_info)| (error.clone(), entry_src_info))
+            .collect();
         Testcase {
             id: id.to_string(),
             filename: filename.to_string(),
-            time_in_ms: hurl_result.time_in_ms,
+            time_in_ms: hurl_result.duration.as_millis(),
             success: hurl_result.success,
             errors,
             timestamp: hurl_result.timestamp,
         }
     }
 
-    /// Exports a [`Testcase`] to HTML.
+    /// Exports a [`Testcase`] to HTML in the directory `dir`.
     ///
     /// It will create three HTML files:
     /// - an HTML view of the Hurl source file (with potential errors and syntax colored),
     /// - an HTML timeline view of the executed entries (with potential errors, waterfall)
     /// - an HTML view of the executed run (headers, cookies, etc...)
+    ///
+    /// `secrets` strings are redacted from teh produced HTML.
     pub fn write_html(
         &self,
         content: &str,
         entries: &[EntryResult],
-        dir_path: &Path,
-    ) -> Result<(), crate::report::Error> {
+        dir: &Path,
+        secrets: &[&str],
+    ) -> Result<(), crate::report::ReportError> {
         // We parse the content as we'll reuse the AST to construct the HTML source file, and
         // the waterfall.
         // TODO: for the moment, we can only have parseable file.
         let hurl_file = parser::parse_hurl_file(content).unwrap();
 
         // We create the timeline view.
-        let output_file = dir_path.join("store").join(self.timeline_filename());
-        let mut file = File::create(output_file)?;
-        let html = self.get_timeline_html(&hurl_file, content, entries);
-        file.write_all(html.as_bytes())?;
+        let output_file = dir.join(self.timeline_filename());
+        let html = self.get_timeline_html(&hurl_file, content, entries, secrets);
+        fs::write(output_file, html.as_bytes())?;
 
         // Then create the run view.
-        let output_file = dir_path.join("store").join(self.run_filename());
-        let mut file = File::create(output_file)?;
-        let html = self.get_run_html(&hurl_file, content, entries);
-        file.write_all(html.as_bytes())?;
+        let output_file = dir.join(self.run_filename());
+        let html = self.get_run_html(&hurl_file, content, entries, secrets);
+        fs::write(output_file, html.as_bytes())?;
 
         // And create the source view.
-        let output_file = dir_path.join("store").join(self.source_filename());
-        let mut file = File::create(output_file)?;
-        let html = self.get_source_html(&hurl_file, content);
-        file.write_all(html.as_bytes())?;
+        let output_file = dir.join(self.source_filename());
+        let html = self.get_source_html(&hurl_file, content, secrets);
+        fs::write(output_file, html.as_bytes())?;
 
         Ok(())
     }

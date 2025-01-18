@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,24 +16,38 @@
  *
  */
 
-use super::OptionsError;
+use super::CliOptionsError;
 use crate::runner::{Number, Value};
+use hurl_core::ast::is_variable_reserved;
 
-pub fn parse(s: &str) -> Result<(String, Value), OptionsError> {
+/// Parses a string "name=value" as a pair of `String` and `Value`.
+///
+/// If `inferred` is `true`, value variant is inferred from the `value`, for instance `true` is parsed as [`Value::Bool(true)`].
+pub fn parse(s: &str, inferred: bool) -> Result<(String, Value), CliOptionsError> {
     match s.find('=') {
-        None => Err(OptionsError::Error(format!(
+        None => Err(CliOptionsError::Error(format!(
             "Missing value for variable {s}!"
         ))),
         Some(index) => {
             let (name, value) = s.split_at(index);
-            let value = parse_value(&value[1..])?;
+            if is_variable_reserved(name) {
+                return Err(CliOptionsError::Error(format!(
+                    "Variable {name} conflicts with the {name} function, use a different name."
+                )));
+            }
+            let value = parse_value(&value[1..], inferred)?;
             Ok((name.to_string(), value))
         }
     }
 }
 
-pub fn parse_value(s: &str) -> Result<Value, OptionsError> {
-    if s == "true" {
+/// Parses a `value` as a pair of String and Value.
+///
+/// If `inferred` is `true`, value variant is inferred from the `value`, for instance true is parsed as [`Value::Bool(true)`].
+pub fn parse_value(s: &str, inferred: bool) -> Result<Value, CliOptionsError> {
+    if !inferred {
+        Ok(Value::String(s.to_string()))
+    } else if s == "true" {
         Ok(Value::Bool(true))
     } else if s == "false" {
         Ok(Value::Bool(false))
@@ -47,7 +61,7 @@ pub fn parse_value(s: &str) -> Result<Value, OptionsError> {
         if let Some(s) = s.strip_suffix('"') {
             Ok(Value::String(s.to_string()))
         } else {
-            Err(OptionsError::Error(
+            Err(CliOptionsError::Error(
                 "Value should end with a double quote".to_string(),
             ))
         }
@@ -58,79 +72,95 @@ pub fn parse_value(s: &str) -> Result<Value, OptionsError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OptionsError, *};
+    use super::{CliOptionsError, *};
 
     #[test]
     fn test_parse() {
         assert_eq!(
-            parse("name=Jennifer").unwrap(),
+            parse("name=Jennifer", true).unwrap(),
             ("name".to_string(), Value::String("Jennifer".to_string()))
         );
         assert_eq!(
-            parse("female=true").unwrap(),
+            parse("female=true", true).unwrap(),
             ("female".to_string(), Value::Bool(true))
         );
         assert_eq!(
-            parse("age=30").unwrap(),
+            parse("age=30", true).unwrap(),
             ("age".to_string(), Value::Number(Number::Integer(30)))
         );
         assert_eq!(
-            parse("height=1.7").unwrap(),
+            parse("height=1.7", true).unwrap(),
             ("height".to_string(), Value::Number(Number::Float(1.7)))
         );
         assert_eq!(
-            parse("id=\"123\"").unwrap(),
+            parse("id=\"123\"", true).unwrap(),
             ("id".to_string(), Value::String("123".to_string()))
         );
         assert_eq!(
-            parse("a_null=null").unwrap(),
+            parse("a_null=null", true).unwrap(),
             ("a_null".to_string(), Value::Null)
+        );
+        assert_eq!(
+            parse("a_null=null", false).unwrap(),
+            ("a_null".to_string(), Value::String("null".to_string()))
         );
     }
 
     #[test]
     fn test_parse_error() {
         assert_eq!(
-            parse("name").err().unwrap(),
-            OptionsError::Error("Missing value for variable name!".to_string())
+            parse("name", true).err().unwrap(),
+            CliOptionsError::Error("Missing value for variable name!".to_string())
         );
     }
 
     #[test]
     fn test_parse_value() {
         assert_eq!(
-            parse_value("Jennifer").unwrap(),
+            parse_value("Jennifer", true).unwrap(),
             Value::String("Jennifer".to_string())
         );
-        assert_eq!(parse_value("true").unwrap(), Value::Bool(true));
+        assert_eq!(parse_value("true", true).unwrap(), Value::Bool(true));
         assert_eq!(
-            parse_value("30").unwrap(),
+            parse_value("30", true).unwrap(),
             Value::Number(Number::Integer(30))
         );
         assert_eq!(
-            parse_value("1.7").unwrap(),
+            parse_value("30", false).unwrap(),
+            Value::String("30".to_string())
+        );
+        assert_eq!(
+            parse_value("1.7", true).unwrap(),
             Value::Number(Number::Float(1.7))
         );
         assert_eq!(
-            parse_value("1.0").unwrap(),
+            parse_value("1.7", false).unwrap(),
+            Value::String("1.7".to_string())
+        );
+        assert_eq!(
+            parse_value("1.0", true).unwrap(),
             Value::Number(Number::Float(1.0))
         );
         assert_eq!(
-            parse_value("-1.0").unwrap(),
+            parse_value("-1.0", true).unwrap(),
             Value::Number(Number::Float(-1.0))
         );
         assert_eq!(
-            parse_value("\"123\"").unwrap(),
+            parse_value("\"123\"", true).unwrap(),
             Value::String("123".to_string())
         );
-        assert_eq!(parse_value("null").unwrap(), Value::Null);
+        assert_eq!(
+            parse_value("\"123\"", false).unwrap(),
+            Value::String("\"123\"".to_string())
+        );
+        assert_eq!(parse_value("null", true).unwrap(), Value::Null);
     }
 
     #[test]
     fn test_parse_value_error() {
         assert_eq!(
-            parse_value("\"123").err().unwrap(),
-            OptionsError::Error("Value should end with a double quote".to_string())
-        )
+            parse_value("\"123", true).err().unwrap(),
+            CliOptionsError::Error("Value should end with a double quote".to_string())
+        );
     }
 }

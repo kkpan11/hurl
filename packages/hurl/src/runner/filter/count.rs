@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,38 +15,39 @@
  * limitations under the License.
  *
  */
-
 use hurl_core::ast::SourceInfo;
 
-use crate::runner::{Error, Number, RunnerError, Value};
+use crate::runner::{Number, RunnerError, RunnerErrorKind, Value};
 
+/// Counts the number of items in a collection `value`.
 pub fn eval_count(
     value: &Value,
     source_info: SourceInfo,
     assert: bool,
-) -> Result<Option<Value>, Error> {
+) -> Result<Option<Value>, RunnerError> {
     match value {
         Value::List(values) => Ok(Some(Value::Number(Number::Integer(values.len() as i64)))),
         Value::Bytes(values) => Ok(Some(Value::Number(Number::Integer(values.len() as i64)))),
         Value::Nodeset(size) => Ok(Some(Value::Number(Number::Integer(*size as i64)))),
         v => {
-            let inner = RunnerError::FilterInvalidInput(v._type());
-            Err(Error::new(source_info, inner, assert))
+            let kind = RunnerErrorKind::FilterInvalidInput(v.kind().to_string());
+            Err(RunnerError::new(source_info, kind, assert))
         }
     }
 }
 
 #[cfg(test)]
-pub mod tests {
-    use crate::runner::filter::eval::eval_filter;
-    use hurl_core::ast::{Filter, FilterValue, Pos, SourceInfo};
-    use std::collections::HashMap;
+mod tests {
+    use hurl_core::ast::{Filter, FilterValue, SourceInfo};
+    use hurl_core::reader::Pos;
 
     use super::*;
+    use crate::runner::filter::eval::eval_filter;
+    use crate::runner::VariableSet;
 
     #[test]
-    pub fn eval_filter_count() {
-        let variables = HashMap::new();
+    fn eval_filter_count() {
+        let variables = VariableSet::new();
 
         let filter = Filter {
             source_info: SourceInfo::new(Pos::new(1, 1), Pos::new(1, 6)),
@@ -76,8 +77,8 @@ pub mod tests {
             SourceInfo::new(Pos::new(1, 1), Pos::new(1, 6))
         );
         assert_eq!(
-            error.inner,
-            RunnerError::FilterInvalidInput("boolean".to_string())
+            error.kind,
+            RunnerErrorKind::FilterInvalidInput("boolean".to_string())
         );
     }
 }

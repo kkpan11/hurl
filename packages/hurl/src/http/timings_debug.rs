@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ use crate::util::logger::Logger;
 
 impl Timings {
     /// Logs the response timings information.
-    pub fn log(&self, logger: &Logger) {
+    pub fn log(&self, logger: &mut Logger) {
         logger.debug_important("Timings:");
         logger.debug(&format!("begin: {}", self.begin_call));
         logger.debug(&format!("end: {}", self.end_call));

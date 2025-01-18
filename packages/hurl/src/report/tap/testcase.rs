@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
  * limitations under the License.
  *
  */
+use hurl_core::input::Input;
 
-use crate::report::Error;
+use crate::report::ReportError;
 use crate::runner::HurlResult;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,7 +28,7 @@ pub struct Testcase {
 
 impl Testcase {
     /// Creates an Tap &lt;testcase&gt; from an [`HurlResult`].
-    pub fn from(hurl_result: &HurlResult, filename: &str) -> Testcase {
+    pub fn from(hurl_result: &HurlResult, filename: &Input) -> Testcase {
         let description = filename.to_string();
         let success = hurl_result.errors().is_empty();
         Testcase {
@@ -39,7 +40,7 @@ impl Testcase {
     /// Creates an Tap &lt;testcase&gt; from a TAP line
     /// ok 1 - this is the first test
     /// nok 2 - this is the second test
-    pub(crate) fn parse(line: &str) -> Result<Testcase, Error> {
+    pub(crate) fn parse(line: &str) -> Result<Testcase, ReportError> {
         let mut line = line;
         let success = if line.starts_with("ok") {
             line = &line[2..];
@@ -48,22 +49,22 @@ impl Testcase {
             line = &line[6..];
             false
         } else {
-            return Err(Error {
-                message: format!("Invalid TAP line <{line}> - must start with ok or nok"),
-            });
+            return Err(ReportError::from_string(&format!(
+                "Invalid TAP line <{line}> - must start with ok or nok"
+            )));
         };
 
         let description = match line.find('-') {
             None => {
-                return Err(Error {
-                    message: format!("Invalid TAP line <{line}> - missing '-' separator"),
-                })
+                return Err(ReportError::from_string(&format!(
+                    "Invalid TAP line <{line}> - missing '-' separator"
+                )));
             }
             Some(index) => {
                 if line.split_at(index).0.trim().parse::<usize>().is_err() {
-                    return Err(Error {
-                        message: format!("Invalid TAP line <{line}> - missing test number"),
-                    });
+                    return Err(ReportError::from_string(&format!(
+                        "Invalid TAP line <{line}> - missing test number"
+                    )));
                 }
                 line.split_at(index).1[1..].trim().to_string()
             }
@@ -82,7 +83,7 @@ mod tests {
     #[test]
     fn parse_tap_test_line() {
         assert_eq!(
-            Testcase::parse("toto").err().unwrap().message,
+            Testcase::parse("toto").err().unwrap().to_string(),
             "Invalid TAP line <toto> - must start with ok or nok".to_string()
         );
 

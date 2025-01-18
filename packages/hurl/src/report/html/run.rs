@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ use crate::http::Call;
 use crate::report::html::nav::Tab;
 use crate::report::html::Testcase;
 use crate::runner::EntryResult;
+use crate::util::redacted::Redact;
 
 impl Testcase {
     /// Creates an HTML view of a run (HTTP status code, response header etc...)
@@ -29,8 +30,9 @@ impl Testcase {
         hurl_file: &HurlFile,
         content: &str,
         entries: &[EntryResult],
+        secrets: &[&str],
     ) -> String {
-        let nav = self.get_nav_html(content, Tab::Run);
+        let nav = self.get_nav_html(content, Tab::Run, secrets);
         let nav_css = include_str!("resources/nav.css");
         let run_css = include_str!("resources/run.css");
 
@@ -38,11 +40,11 @@ impl Testcase {
         for (entry_index, e) in entries.iter().enumerate() {
             let entry_src_index = e.entry_index - 1;
             let entry_src = hurl_file.entries.get(entry_src_index).unwrap();
-            let line = entry_src.request.space0.source_info.start.line;
+            let line = entry_src.source_info().start.line;
             let source = self.source_filename();
 
             run.push_str("<details open>");
-            let info = get_entry_html(e, entry_index + 1);
+            let info = get_entry_html(e, entry_index + 1, secrets);
             run.push_str(&info);
 
             for (call_index, c) in e.calls.iter().enumerate() {
@@ -53,6 +55,7 @@ impl Testcase {
                     &self.filename,
                     &source,
                     line,
+                    secrets,
                 );
                 run.push_str(&info);
             }
@@ -72,15 +75,19 @@ impl Testcase {
 }
 
 /// Returns an HTML view of an `entry` information as HTML (title, `entry_index` and captures).
-fn get_entry_html(entry: &EntryResult, entry_index: usize) -> String {
+fn get_entry_html(entry: &EntryResult, entry_index: usize, secrets: &[&str]) -> String {
     let mut text = String::new();
     text.push_str(&format!("<summary>Entry {entry_index}</summary>"));
+
+    let cmd = entry.curl_cmd.redact(secrets);
+    let table = new_table("Debug", &[("Command", &cmd)]);
+    text.push_str(&table);
 
     if !entry.captures.is_empty() {
         let mut values = entry
             .captures
             .iter()
-            .map(|c| (&c.name, c.value.to_string()))
+            .map(|c| (&c.name, c.value.redact(secrets)))
             .collect::<Vec<(&String, String)>>();
         values.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
         let table = new_table("Captures", &values);
@@ -98,6 +105,7 @@ fn get_call_html(
     filename: &str,
     source: &str,
     line: usize,
+    secrets: &[&str],
 ) -> String {
     let mut text = String::new();
     let id = format!("e{entry_index}:c{call_index}");
@@ -106,7 +114,7 @@ fn get_call_html(
     // General
     let status = call.response.status.to_string();
     let version = call.response.version.to_string();
-    let url = &call.request.url;
+    let url = &call.request.url.redact(secrets);
     let url = format!("<a href=\"{url}\">{url}</a>");
     let source = format!("<a href=\"{source}#l{line}\">{filename}:{line}</a>");
     let values = vec![
@@ -138,8 +146,8 @@ fn get_call_html(
         .request
         .headers
         .iter()
-        .map(|h| (h.name.as_str(), h.value.as_str()))
-        .collect::<Vec<(&str, &str)>>();
+        .map(|h| (h.name.as_str(), h.value.redact(secrets)))
+        .collect::<Vec<(&str, String)>>();
     values.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
     let table = new_table("Request Headers", &values);
     text.push_str(&table);
@@ -148,8 +156,8 @@ fn get_call_html(
         .response
         .headers
         .iter()
-        .map(|h| (h.name.as_str(), h.value.as_str()))
-        .collect::<Vec<(&str, &str)>>();
+        .map(|h| (h.name.as_str(), h.value.redact(secrets)))
+        .collect::<Vec<(&str, String)>>();
     values.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
     let table = new_table("Response Headers", &values);
     text.push_str(&table);
@@ -157,7 +165,11 @@ fn get_call_html(
     text
 }
 
-fn new_table<T: AsRef<str>, U: AsRef<str>>(title: &str, data: &[(T, U)]) -> String {
+/// Returns an HTML table with a `title` and a list of key/values. Values are redacted using `secrets`.
+fn new_table<T: AsRef<str>, U: AsRef<str> + std::fmt::Display>(
+    title: &str,
+    data: &[(T, U)],
+) -> String {
     let mut text = String::new();
     text.push_str(&format!(
         "<table><thead><tr><th colspan=\"2\">{title}</tr></th></thead><tbody>"
@@ -166,7 +178,7 @@ fn new_table<T: AsRef<str>, U: AsRef<str>>(title: &str, data: &[(T, U)]) -> Stri
         text.push_str(&format!(
             "<tr><td class=\"name\">{}</td><td class=\"value\">{}</td></tr>",
             name.as_ref(),
-            value.as_ref()
+            value
         ));
     });
     text.push_str("</tbody></table>");

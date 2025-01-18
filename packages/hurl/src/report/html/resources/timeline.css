@@ -33,3 +33,13 @@ body {
     overflow-y: hidden;
 }
 
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #19191c;
+        color: #c2c2c2;
+    }
+
+    .timeline-container {
+        border-color: #444;
+    }
+}

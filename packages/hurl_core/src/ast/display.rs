@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,14 @@
  * limitations under the License.
  *
  */
+use crate::ast::{
+    BooleanOption, CookieAttribute, CookieAttributeName, CookiePath, CountOption, DurationOption,
+    Expr, ExprKind, Float, Function, Hex, Method, MultilineString, MultilineStringAttribute,
+    MultilineStringKind, NaturalOption, Number, Placeholder, PredicateFuncValue, Regex, Status,
+    StatusValue, Template, TemplateElement, Variable, VariableDefinition, VariableValue, Version,
+    VersionValue,
+};
 use core::fmt;
-
-use crate::ast::core::*;
 
 impl fmt::Display for Method {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -74,7 +79,7 @@ impl fmt::Display for TemplateElement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
             TemplateElement::String { value, .. } => value.clone(),
-            TemplateElement::Expression(value) => format!("{{{{{value}}}}}"),
+            TemplateElement::Placeholder(value) => format!("{{{{{value}}}}}"),
         };
         write!(f, "{s}")
     }
@@ -85,7 +90,7 @@ impl fmt::Display for Number {
         match self {
             Number::Float(value) => write!(f, "{}", value),
             Number::Integer(value) => write!(f, "{}", value),
-            Number::String(value) => write!(f, "{}", value),
+            Number::BigInteger(value) => write!(f, "{}", value),
         }
     }
 }
@@ -96,9 +101,39 @@ impl fmt::Display for Float {
     }
 }
 
+impl fmt::Display for Placeholder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.expr)
+    }
+}
+
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.variable.name)
+        write!(f, "{}", self.kind)
+    }
+}
+
+impl fmt::Display for ExprKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ExprKind::Variable(variable) => write!(f, "{}", variable),
+            ExprKind::Function(function) => write!(f, "{}", function),
+        }
+    }
+}
+
+impl fmt::Display for Variable {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl fmt::Display for Function {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Function::NewDate => write!(f, "newDate"),
+            Function::NewUuid => write!(f, "newUuid"),
+        }
     }
 }
 
@@ -147,12 +182,11 @@ impl fmt::Display for Regex {
 
 impl fmt::Display for MultilineString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let body = match self {
-            MultilineString::OneLineText(template) => template.to_string(),
-            MultilineString::Text(text)
-            | MultilineString::Json(text)
-            | MultilineString::Xml(text) => text.value.to_string(),
-            MultilineString::GraphQl(graphql) => {
+        let body = match &self.kind {
+            MultilineStringKind::Text(text)
+            | MultilineStringKind::Json(text)
+            | MultilineStringKind::Xml(text) => text.value.to_string(),
+            MultilineStringKind::GraphQl(graphql) => {
                 let var = match &graphql.variables {
                     None => String::new(),
                     Some(var) => {
@@ -169,11 +203,20 @@ impl fmt::Display for MultilineString {
     }
 }
 
+impl fmt::Display for MultilineStringAttribute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MultilineStringAttribute::Escape => write!(f, "escape"),
+            MultilineStringAttribute::NoVariable => write!(f, "novariable"),
+        }
+    }
+}
+
 impl fmt::Display for BooleanOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BooleanOption::Literal(v) => write!(f, "{}", v),
-            BooleanOption::Expression(v) => write!(f, "{}", v),
+            BooleanOption::Placeholder(v) => write!(f, "{}", v),
         }
     }
 }
@@ -182,16 +225,25 @@ impl fmt::Display for NaturalOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NaturalOption::Literal(v) => write!(f, "{}", v),
-            NaturalOption::Expression(v) => write!(f, "{}", v),
+            NaturalOption::Placeholder(v) => write!(f, "{}", v),
         }
     }
 }
 
-impl fmt::Display for RetryOption {
+impl fmt::Display for CountOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RetryOption::Literal(v) => write!(f, "{}", v),
-            RetryOption::Expression(v) => write!(f, "{}", v),
+            CountOption::Literal(v) => write!(f, "{}", v),
+            CountOption::Placeholder(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+impl fmt::Display for DurationOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DurationOption::Literal(v) => write!(f, "{}", v),
+            DurationOption::Placeholder(v) => write!(f, "{}", v),
         }
     }
 }
@@ -207,8 +259,7 @@ impl fmt::Display for VariableValue {
         let s = match self {
             VariableValue::Null => "null".to_string(),
             VariableValue::Bool(value) => value.to_string(),
-            VariableValue::Integer(n) => n.to_string(),
-            VariableValue::Float(x) => x.to_string(),
+            VariableValue::Number(n) => n.to_string(),
             VariableValue::String(s) => s.to_string(),
         };
         write!(f, "{}", s)
@@ -216,81 +267,38 @@ impl fmt::Display for VariableValue {
 }
 
 impl PredicateFuncValue {
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> &str {
         match self {
-            PredicateFuncValue::Equal { operator, .. } => {
-                if *operator {
-                    "==".to_string()
-                } else {
-                    "equals".to_string()
-                }
-            }
-            PredicateFuncValue::NotEqual { operator, .. } => {
-                if *operator {
-                    "!=".to_string()
-                } else {
-                    "notEquals".to_string()
-                }
-            }
-            PredicateFuncValue::GreaterThan { operator, .. } => {
-                if *operator {
-                    ">".to_string()
-                } else {
-                    "greaterThan".to_string()
-                }
-            }
-            PredicateFuncValue::GreaterThanOrEqual { operator, .. } => {
-                if *operator {
-                    ">=".to_string()
-                } else {
-                    "greaterThanOrEquals".to_string()
-                }
-            }
-            PredicateFuncValue::LessThan { operator, .. } => {
-                if *operator {
-                    "<".to_string()
-                } else {
-                    "lessThan".to_string()
-                }
-            }
-            PredicateFuncValue::LessThanOrEqual { operator, .. } => {
-                if *operator {
-                    "<=".to_string()
-                } else {
-                    "lessThanOrEquals".to_string()
-                }
-            }
-            PredicateFuncValue::StartWith { .. } => "startsWith".to_string(),
-            PredicateFuncValue::EndWith { .. } => "endsWith".to_string(),
-            PredicateFuncValue::Contain { .. } => "contains".to_string(),
-            PredicateFuncValue::Include { .. } => "includes".to_string(),
-            PredicateFuncValue::Match { .. } => "matches".to_string(),
-            PredicateFuncValue::IsInteger => "isInteger".to_string(),
-            PredicateFuncValue::IsFloat => "isFloat".to_string(),
-            PredicateFuncValue::IsBoolean => "isBoolean".to_string(),
-            PredicateFuncValue::IsString => "isString".to_string(),
-            PredicateFuncValue::IsCollection => "isCollection".to_string(),
-            PredicateFuncValue::IsDate => "isDate".to_string(),
-            PredicateFuncValue::Exist => "exists".to_string(),
-            PredicateFuncValue::IsEmpty => "isEmpty".to_string(),
+            PredicateFuncValue::Equal { .. } => "==",
+            PredicateFuncValue::NotEqual { .. } => "!=",
+            PredicateFuncValue::GreaterThan { .. } => ">",
+            PredicateFuncValue::GreaterThanOrEqual { .. } => ">=",
+            PredicateFuncValue::LessThan { .. } => "<",
+            PredicateFuncValue::LessThanOrEqual { .. } => "<=",
+            PredicateFuncValue::StartWith { .. } => "startsWith",
+            PredicateFuncValue::EndWith { .. } => "endsWith",
+            PredicateFuncValue::Contain { .. } => "contains",
+            PredicateFuncValue::Include { .. } => "includes",
+            PredicateFuncValue::Match { .. } => "matches",
+            PredicateFuncValue::IsInteger => "isInteger",
+            PredicateFuncValue::IsFloat => "isFloat",
+            PredicateFuncValue::IsBoolean => "isBoolean",
+            PredicateFuncValue::IsString => "isString",
+            PredicateFuncValue::IsCollection => "isCollection",
+            PredicateFuncValue::IsDate => "isDate",
+            PredicateFuncValue::IsIsoDate => "isIsoDate",
+            PredicateFuncValue::Exist => "exists",
+            PredicateFuncValue::IsEmpty => "isEmpty",
+            PredicateFuncValue::IsNumber => "isNumber",
         }
-    }
-}
-
-impl fmt::Display for Retry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            Retry::None => 0,
-            Retry::Finite(n) => *n as i32,
-            Retry::Infinite => -1,
-        };
-        write!(f, "{}", value)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{CookieAttributeName, SourceInfo, Whitespace};
+    use crate::reader::Pos;
 
     fn whitespace() -> Whitespace {
         Whitespace {
@@ -299,11 +307,14 @@ mod tests {
         }
     }
 
-    fn variable_expr() -> Expr {
-        Expr {
+    fn variable_placeholder() -> Placeholder {
+        Placeholder {
             space0: whitespace(),
-            variable: Variable {
-                name: "name".to_string(),
+            expr: Expr {
+                kind: ExprKind::Variable(Variable {
+                    name: "name".to_string(),
+                    source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
+                }),
                 source_info: SourceInfo::new(Pos::new(0, 0), Pos::new(0, 0)),
             },
             space1: whitespace(),
@@ -318,7 +329,7 @@ mod tests {
                     value: "Hello ".to_string(),
                     encoded: "Hello ".to_string(),
                 },
-                TemplateElement::Expression(variable_expr()),
+                TemplateElement::Placeholder(variable_placeholder()),
                 TemplateElement::String {
                     value: "!".to_string(),
                     encoded: "!".to_string(),

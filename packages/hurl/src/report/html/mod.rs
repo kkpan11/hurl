@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,7 @@
  * limitations under the License.
  *
  */
-
-//! HTML report
+//! HTML report.
 mod nav;
 mod report;
 mod run;
@@ -31,12 +30,12 @@ pub use testcase::Testcase;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HTMLResult {
     /// Original filename, as given in the run execution
-    pub filename: String,
+    filename: String,
     /// The id of the corresponding [`Testcase`]
-    pub id: String,
-    pub time_in_ms: u128,
-    pub success: bool,
-    pub timestamp: i64,
+    id: String,
+    time_in_ms: u128,
+    success: bool,
+    timestamp: i64,
 }
 
 impl HTMLResult {

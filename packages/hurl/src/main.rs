@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,19 +16,22 @@
  *
  */
 mod cli;
+mod run;
 
+use std::collections::HashSet;
 use std::io::prelude::*;
 use std::path::Path;
 use std::time::Instant;
-use std::{env, process};
+use std::{env, process, thread};
 
-use colored::control;
-use hurl::report::{html, junit, tap};
+use hurl::report::{curl, html, json, junit, tap};
+use hurl::runner;
 use hurl::runner::HurlResult;
-use hurl::util::logger::{BaseLogger, Logger, LoggerOptionsBuilder, Verbosity};
-use hurl::{output, runner};
+use hurl_core::input::Input;
+use hurl_core::text;
 
-use crate::cli::options::OptionsError;
+use crate::cli::options::{CliOptions, CliOptionsError};
+use crate::cli::{BaseLogger, CliError};
 
 const EXIT_OK: i32 = 0;
 const EXIT_ERROR_COMMANDLINE: i32 = 1;
@@ -42,28 +45,24 @@ const EXIT_ERROR_UNDEFINED: i32 = 127;
 struct HurlRun {
     /// Source string for this [`HurlFile`]
     content: String,
-    /// Filename of the content
-    filename: String,
+    /// Content's source file
+    filename: Input,
     hurl_result: HurlResult,
 }
 
 /// Executes Hurl entry point.
 fn main() {
-    init_colored();
+    text::init_crate_colored();
 
     let opts = match cli::options::parse() {
         Ok(v) => v,
         Err(e) => match e {
-            OptionsError::Info(message) => {
-                print!("{message}");
+            CliOptionsError::Info(_) => {
+                print!("{e}");
                 process::exit(EXIT_OK);
             }
-            OptionsError::NoInput(message) => {
-                eprintln!("{message}");
-                process::exit(EXIT_ERROR_COMMANDLINE);
-            }
-            OptionsError::Error(message) => {
-                eprintln!("error: {message}");
+            _ => {
+                eprintln!("{e}");
                 process::exit(EXIT_ERROR_COMMANDLINE);
             }
         },
@@ -77,125 +76,44 @@ fn main() {
     let current_dir = unwrap_or_exit(current_dir, EXIT_ERROR_UNDEFINED, &base_logger);
     let current_dir = current_dir.as_path();
     let start = Instant::now();
-    let mut runs = vec![];
 
-    for (current, filename) in opts.input_files.iter().enumerate() {
-        // We check the input file existence and check that we can read its contents.
-        // Once the preconditions succeed, we can parse the Hurl file, and run it.
-        if filename != "-" && !Path::new(filename).exists() {
-            let message = format!("hurl: cannot access '{filename}': No such file or directory");
-            exit_with_error(&message, EXIT_ERROR_PARSING, &base_logger);
-        }
-        let content = cli::read_to_string(filename.as_str());
-        let content = unwrap_or_exit(content, EXIT_ERROR_PARSING, &base_logger);
+    let runs = if opts.parallel {
+        let available = unwrap_or_exit(
+            thread::available_parallelism(),
+            EXIT_ERROR_UNDEFINED,
+            &base_logger,
+        );
+        let workers_count = opts.jobs.unwrap_or(available.get());
+        base_logger.debug(&format!("Parallel run using {workers_count} workers"));
 
-        let verbosity = Verbosity::from(opts.verbose, opts.very_verbose);
-        let logger_options = LoggerOptionsBuilder::new()
-            .color(opts.color)
-            .error_format(opts.error_format.into())
-            .filename(filename)
-            .progress_bar(opts.progress_bar)
-            .test(opts.test)
-            .verbosity(verbosity)
-            .build();
-        let logger = Logger::from(&logger_options);
-        let total = opts.input_files.len();
-        logger.test_running(current + 1, total);
+        run::run_par(&opts.input_files, current_dir, &opts, workers_count)
+    } else {
+        run::run_seq(&opts.input_files, current_dir, &opts)
+    };
+    let runs = match runs {
+        Ok(r) => r,
+        Err(CliError::IO(msg)) => exit_with_error(&msg, EXIT_ERROR_PARSING, &base_logger),
+        // In case of parsing error, there is no error because the display of parsing error has been
+        // done in the execution of the Hurl files, inside the crates (and not in the main).
+        Err(CliError::Parsing) => exit_with_error("", EXIT_ERROR_PARSING, &base_logger),
+        Err(CliError::Runtime(msg)) => exit_with_error(&msg, EXIT_ERROR_RUNTIME, &base_logger),
+    };
 
-        // Run our Hurl file now
-        let hurl_result = execute(&content, filename, current_dir, &opts);
-        let hurl_result = match hurl_result {
-            Ok(h) => h,
-            Err(_) => process::exit(EXIT_ERROR_PARSING),
-        };
+    // Compute duration of the test here to not take reports writings into account.
+    let duration = start.elapsed();
 
-        logger.test_completed(&hurl_result);
-        let success = hurl_result.success;
-
-        // We can output the result, either the raw body or a structured JSON representation.
-        let output_body = success
-            && !opts.interactive
-            && matches!(opts.output_type, cli::OutputType::ResponseBody);
-        if output_body {
-            let include_headers = opts.include;
-            let result = output::write_body(
-                &hurl_result,
-                filename,
-                include_headers,
-                opts.color,
-                &opts.output,
-                &logger,
-            );
-            unwrap_or_exit(result, EXIT_ERROR_RUNTIME, &base_logger);
-        }
-        if matches!(opts.output_type, cli::OutputType::Json) {
-            let result = output::write_json(&hurl_result, &content, filename, &opts.output);
-            unwrap_or_exit(result, EXIT_ERROR_RUNTIME, &base_logger);
-        }
-
-        let run = HurlRun {
-            content,
-            filename: filename.to_string(),
-            hurl_result,
-        };
-        runs.push(run);
-    }
-
-    if let Some(filename) = opts.junit_file {
-        base_logger.debug(format!("Writing JUnit report to {filename}").as_str());
-        let result = create_junit_report(&runs, &filename);
-        unwrap_or_exit(result, EXIT_ERROR_UNDEFINED, &base_logger);
-    }
-
-    if let Some(filename) = opts.tap_file {
-        base_logger.debug(format!("Writing TAP report to {filename}").as_str());
-        let result = create_tap_report(&runs, &filename);
-        unwrap_or_exit(result, EXIT_ERROR_UNDEFINED, &base_logger);
-    }
-
-    if let Some(dir) = opts.html_dir {
-        base_logger.debug(format!("Writing HTML report to {}", dir.display()).as_str());
-        let result = create_html_report(&runs, &dir);
-        unwrap_or_exit(result, EXIT_ERROR_UNDEFINED, &base_logger);
-    }
-
-    if let Some(filename) = opts.cookie_output_file {
-        base_logger.debug(format!("Writing cookies to {filename}").as_str());
-        let result = create_cookies_file(&runs, &filename);
-        unwrap_or_exit(result, EXIT_ERROR_UNDEFINED, &base_logger);
+    // Write HTML, JUnit, TAP reports on disk.
+    if has_report(&opts) {
+        let ret = export_results(&runs, &opts, &base_logger);
+        unwrap_or_exit(ret, EXIT_ERROR_UNDEFINED, &base_logger);
     }
 
     if opts.test {
-        let duration = start.elapsed().as_millis();
-        let summary = get_summary(&runs, duration);
+        let summary = cli::summary(&runs, duration);
         base_logger.info(summary.as_str());
     }
 
     process::exit(exit_code(&runs));
-}
-
-/// Runs a Hurl `content` and returns a result.
-fn execute(
-    content: &str,
-    filename: &str,
-    current_dir: &Path,
-    cli_options: &cli::options::Options,
-) -> Result<HurlResult, String> {
-    let variables = &cli_options.variables;
-    let runner_options = cli_options.to_runner_options(filename, current_dir);
-    let logger_options = cli_options.to_logger_options(filename);
-    runner::run(content, &runner_options, variables, &logger_options)
-}
-
-#[cfg(target_family = "unix")]
-fn init_colored() {
-    control::set_override(true);
-}
-
-#[cfg(target_family = "windows")]
-fn init_colored() {
-    control::set_override(true);
-    control::set_virtual_terminal(true).expect("set virtual terminal");
 }
 
 /// Unwraps a `result` or exit with message.
@@ -217,38 +135,115 @@ fn exit_with_error(message: &str, code: i32, logger: &BaseLogger) -> ! {
     process::exit(code);
 }
 
-/// Create a JUnit report for this run.
-fn create_junit_report(runs: &[HurlRun], filename: &str) -> Result<(), cli::CliError> {
-    let testcases: Vec<junit::Testcase> = runs
+/// Returns `true` if any kind of report should be created, `false` otherwise.
+fn has_report(opts: &CliOptions) -> bool {
+    opts.curl_file.is_some()
+        || opts.junit_file.is_some()
+        || opts.tap_file.is_some()
+        || opts.html_dir.is_some()
+        || opts.json_report_dir.is_some()
+        || opts.cookie_output_file.is_some()
+}
+
+/// Writes `runs` results on file, in HTML, TAP, JUnit or Cookie file format.
+fn export_results(
+    runs: &[HurlRun],
+    opts: &CliOptions,
+    logger: &BaseLogger,
+) -> Result<(), CliError> {
+    // Compute secrets from the result. As secrets can be redacted during execution, we can't
+    // consider only secrets introduced from cli, we have to get secrets produced during execution.
+    // We remove identical secrets as there may be a lot of identical secrets (those that come
+    // from the command line for instance)
+    let set = runs
+        .iter()
+        .flat_map(|r| r.hurl_result.variables.secrets())
+        .collect::<HashSet<_>>();
+    let secrets = set.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
+
+    if let Some(file) = &opts.curl_file {
+        create_curl_export(runs, file)?;
+    }
+    if let Some(file) = &opts.junit_file {
+        logger.debug(&format!("Writing JUnit report to {}", file.display()));
+        create_junit_report(runs, file)?;
+    }
+    if let Some(file) = &opts.tap_file {
+        logger.debug(&format!("Writing TAP report to {}", file.display()));
+        create_tap_report(runs, file)?;
+    }
+    if let Some(dir) = &opts.html_dir {
+        logger.debug(&format!("Writing HTML report to {}", dir.display()));
+        create_html_report(runs, dir, &secrets)?;
+    }
+    if let Some(dir) = &opts.json_report_dir {
+        logger.debug(&format!("Writing JSON report to {}", dir.display()));
+        create_json_report(runs, dir)?;
+    }
+    if let Some(file) = &opts.cookie_output_file {
+        logger.debug(&format!("Writing cookies to {}", file.display()));
+        create_cookies_file(runs, file)?;
+    }
+    Ok(())
+}
+
+/// Creates an export of all curl commands for this run.
+fn create_curl_export(runs: &[HurlRun], filename: &Path) -> Result<(), CliError> {
+    let results = runs.iter().map(|r| &r.hurl_result).collect::<Vec<_>>();
+    curl::write_curl(&results, filename)?;
+    Ok(())
+}
+
+/// Creates a JUnit report for this run.
+fn create_junit_report(runs: &[HurlRun], filename: &Path) -> Result<(), CliError> {
+    let testcases = runs
         .iter()
         .map(|r| junit::Testcase::from(&r.hurl_result, &r.content, &r.filename))
-        .collect();
+        .collect::<Vec<_>>();
     junit::write_report(filename, &testcases)?;
     Ok(())
 }
 
-/// Create a TAP report for this run.
-fn create_tap_report(runs: &[HurlRun], filename: &str) -> Result<(), cli::CliError> {
-    let testcases: Vec<tap::Testcase> = runs
+/// Creates a TAP report for this run.
+fn create_tap_report(runs: &[HurlRun], filename: &Path) -> Result<(), CliError> {
+    let testcases = runs
         .iter()
         .map(|r| tap::Testcase::from(&r.hurl_result, &r.filename))
-        .collect();
+        .collect::<Vec<_>>();
     tap::write_report(filename, &testcases)?;
     Ok(())
 }
 
-/// Create an HTML report for this run.
-fn create_html_report(runs: &[HurlRun], dir_path: &Path) -> Result<(), cli::CliError> {
+/// Creates an HTML report for this run.
+fn create_html_report(runs: &[HurlRun], dir_path: &Path, secrets: &[&str]) -> Result<(), CliError> {
     // We ensure that the containing folder exists.
-    std::fs::create_dir_all(dir_path.join("store")).unwrap();
+    let store_path = dir_path.join("store");
+    std::fs::create_dir_all(&store_path)?;
 
     let mut testcases = vec![];
     for run in runs.iter() {
-        let testcase = html::Testcase::from(&run.hurl_result, &run.filename);
-        testcase.write_html(&run.content, &run.hurl_result.entries, dir_path)?;
+        let result = &run.hurl_result;
+        let testcase = html::Testcase::from(result, &run.filename);
+        testcase.write_html(&run.content, &result.entries, &store_path, secrets)?;
         testcases.push(testcase);
     }
     html::write_report(dir_path, &testcases)?;
+    Ok(())
+}
+
+/// Creates an JSON report for this run.
+fn create_json_report(runs: &[HurlRun], dir_path: &Path) -> Result<(), CliError> {
+    // We ensure that the containing folder exists.
+    let store_path = dir_path.join("store");
+    std::fs::create_dir_all(&store_path)?;
+
+    let testcases = runs
+        .iter()
+        .map(|r| json::Testcase::new(&r.hurl_result, &r.content, &r.filename))
+        .collect::<Vec<_>>();
+
+    let index_path = dir_path.join("report.json");
+    json::write_report(&index_path, &testcases, &store_path)?;
     Ok(())
 }
 
@@ -259,7 +254,7 @@ fn exit_code(runs: &[HurlRun]) -> i32 {
     for run in runs.iter() {
         let errors = run.hurl_result.errors();
         if errors.is_empty() {
-        } else if errors.iter().filter(|e| !e.assert).count() == 0 {
+        } else if errors.iter().filter(|(error, _)| !error.assert).count() == 0 {
             count_errors_assert += 1;
         } else {
             count_errors_runner += 1;
@@ -274,12 +269,13 @@ fn exit_code(runs: &[HurlRun]) -> i32 {
     }
 }
 
-fn create_cookies_file(runs: &[HurlRun], filename: &str) -> Result<(), cli::CliError> {
+fn create_cookies_file(runs: &[HurlRun], filename: &Path) -> Result<(), CliError> {
     let mut file = match std::fs::File::create(filename) {
         Err(why) => {
-            return Err(cli::CliError {
-                message: format!("Issue writing to {filename}: {why:?}"),
-            });
+            return Err(CliError::IO(format!(
+                "Issue writing to {}: {why:?}",
+                filename.display()
+            )));
         }
         Ok(file) => file,
     };
@@ -290,9 +286,7 @@ fn create_cookies_file(runs: &[HurlRun], filename: &str) -> Result<(), cli::CliE
     .to_string();
     match runs.first() {
         None => {
-            return Err(cli::CliError {
-                message: "Issue fetching results".to_string(),
-            });
+            return Err(CliError::IO("Issue fetching results".to_string()));
         }
         Some(run) => {
             for cookie in run.hurl_result.cookies.iter() {
@@ -303,82 +297,10 @@ fn create_cookies_file(runs: &[HurlRun], filename: &str) -> Result<(), cli::CliE
     }
 
     if let Err(why) = file.write_all(s.as_bytes()) {
-        return Err(cli::CliError {
-            message: format!("Issue writing to {filename}: {why:?}"),
-        });
+        return Err(CliError::IO(format!(
+            "Issue writing to {}: {why:?}",
+            filename.display()
+        )));
     }
     Ok(())
-}
-
-/// Returns the text summary of this Hurl runs.
-fn get_summary(runs: &[HurlRun], duration: u128) -> String {
-    let total = runs.len();
-    let success = runs.iter().filter(|r| r.hurl_result.success).count();
-    let success_percent = 100.0 * success as f32 / total as f32;
-    let failed = total - success;
-    let failed_percent = 100.0 * failed as f32 / total as f32;
-    format!(
-        "--------------------------------------------------------------------------------\n\
-             Executed files:  {total}\n\
-             Succeeded files: {success} ({success_percent:.1}%)\n\
-             Failed files:    {failed} ({failed_percent:.1}%)\n\
-             Duration:        {duration} ms\n"
-    )
-}
-
-#[cfg(test)]
-pub mod tests {
-    use hurl::runner::EntryResult;
-
-    use super::*;
-
-    #[test]
-    fn create_run_summary() {
-        fn new_run(success: bool, entries_count: usize) -> HurlRun {
-            let dummy_entry = EntryResult {
-                entry_index: 0,
-                calls: vec![],
-                captures: vec![],
-                asserts: vec![],
-                errors: vec![],
-                time_in_ms: 0,
-                compressed: false,
-            };
-            HurlRun {
-                content: String::new(),
-                filename: String::new(),
-                hurl_result: HurlResult {
-                    entries: vec![dummy_entry; entries_count],
-                    time_in_ms: 0,
-                    success,
-                    cookies: vec![],
-                    timestamp: 1,
-                },
-            }
-        }
-
-        let runs = vec![new_run(true, 10), new_run(true, 20), new_run(true, 4)];
-        let duration = 128;
-        let summary = get_summary(&runs, duration);
-        assert_eq!(
-            summary,
-            "--------------------------------------------------------------------------------\n\
-             Executed files:  3\n\
-             Succeeded files: 3 (100.0%)\n\
-             Failed files:    0 (0.0%)\n\
-             Duration:        128 ms\n"
-        );
-
-        let runs = vec![new_run(true, 10), new_run(false, 10), new_run(true, 40)];
-        let duration = 200;
-        let summary = get_summary(&runs, duration);
-        assert_eq!(
-            summary,
-            "--------------------------------------------------------------------------------\n\
-            Executed files:  3\n\
-            Succeeded files: 2 (66.7%)\n\
-            Failed files:    1 (33.3%)\n\
-            Duration:        200 ms\n"
-        );
-    }
 }

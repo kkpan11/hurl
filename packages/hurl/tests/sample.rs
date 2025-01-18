@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,15 +15,16 @@
  * limitations under the License.
  *
  */
-use std::collections::HashMap;
+use std::str::FromStr;
 use std::time::Duration;
 
-use hurl::http::{Call, HttpVersion, Request, Response};
+use hurl::http::{Call, HttpVersion, Request, Response, Url};
 use hurl::runner;
-use hurl::runner::{EntryResult, HurlResult, RunnerOptionsBuilder};
+use hurl::runner::{EntryResult, HurlResult, RunnerOptionsBuilder, VariableSet};
 use hurl::util::logger::LoggerOptionsBuilder;
 use hurl::util::path::ContextDir;
-use hurl_core::ast::Retry;
+use hurl_core::input::Input;
+use hurl_core::typing::Count;
 
 #[test]
 fn simple_sample() {
@@ -34,7 +35,7 @@ fn simple_sample() {
         assert!(result.success);
         assert_eq!(result.cookies.len(), 0);
         assert_eq!(result.entries.len(), 1);
-        assert!(result.time_in_ms < 1000);
+        assert!(result.duration.as_millis() < 1000);
     }
 
     fn check_entry(entry: &EntryResult) {
@@ -43,14 +44,17 @@ fn simple_sample() {
         assert_eq!(entry.captures.len(), 1);
         assert_eq!(entry.asserts.len(), 3); // HTTP version + status code + implicit body
         assert_eq!(entry.errors.len(), 0);
-        assert!(entry.time_in_ms < 1000);
+        assert!(entry.transfer_duration.as_millis() < 1000);
         assert!(!entry.compressed);
     }
 
     fn check_call(_: &Call) {}
 
     fn check_request(request: &Request) {
-        assert_eq!(request.url, "http://localhost:8000/hello");
+        assert_eq!(
+            request.url,
+            Url::from_str("http://localhost:8000/hello").unwrap()
+        );
         assert_eq!(request.method, "GET");
         let header_names = request
             .headers
@@ -79,7 +83,10 @@ fn simple_sample() {
         assert!(header_names.contains(&"Server".to_string())); // There are two 'Server' HTTP headers
         assert_eq!(response.body.len(), 12);
         assert!(response.duration < Duration::from_secs(1));
-        assert_eq!(response.url, "http://localhost:8000/hello");
+        assert_eq!(
+            response.url,
+            Url::from_str("http://localhost:8000/hello").unwrap()
+        );
         assert!(response.certificate.is_none());
     }
 
@@ -91,7 +98,7 @@ fn simple_sample() {
     `Hello World!`
     "#;
 
-    let filename = "-";
+    let filename = Some(Input::new("foo.hurl"));
 
     // Define runner and logger options
     let runner_opts = RunnerOptionsBuilder::new()
@@ -105,30 +112,37 @@ fn simple_sample() {
         .follow_location(false)
         .ignore_asserts(false)
         .insecure(false)
-        .max_redirect(None)
+        .max_redirect(Count::Finite(10))
         .no_proxy(None)
         .post_entry(None)
         .pre_entry(None)
         .proxy(None)
-        .retry(Retry::None)
+        .retry(None)
         .retry_interval(Duration::from_secs(1))
         .timeout(Duration::from_secs(300))
         .to_entry(None)
+        .unix_socket(None)
         .user(None)
         .user_agent(None)
         .build();
 
     let logger_opts = LoggerOptionsBuilder::new()
         .color(false)
-        .filename(filename)
         .verbosity(None)
         .build();
 
     // Set variables
-    let variables = HashMap::default();
+    let variables = VariableSet::new();
 
     // Run the hurl file and check data:
-    let result = runner::run(content, &runner_opts, &variables, &logger_opts).unwrap();
+    let result = runner::run(
+        content,
+        filename.as_ref(),
+        &runner_opts,
+        &variables,
+        &logger_opts,
+    )
+    .unwrap();
     check_result(&result);
 
     let entry = result.entries.first().unwrap();

@@ -1,6 +1,6 @@
 [package]
 name = "hurl"
-version = "4.2.0-SNAPSHOT"
+version = "6.1.0-SNAPSHOT"
 authors = ["Fabrice Reix <fabrice.reix@orange.com>", "Jean-Christophe Amiel <jeanchristophe.amiel@orange.com>", "Filipe Pinto <filipe.pinto@orange.com>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -8,48 +8,52 @@ description = "Hurl, run and test HTTP requests"
 documentation = "https://hurl.dev"
 homepage = "https://hurl.dev"
 repository = "https://github.com/Orange-OpenSource/hurl"
-rust-version = "1.74.0"
+rust-version = "1.84.0"
 
 [lib]
 name = "hurl"
 
 [features]
-vendored-openssl = ["curl/static-ssl", "curl-sys/static-ssl"]
+# Re-export of curl/static-ssl: use a bundled OpenSSL version and statically link to it. Only applies on platforms that
+# use OpenSSL
+static-openssl = ["curl/static-ssl", "curl-sys/static-ssl"]
 
 [dependencies]
-base64 = "0.21.5"
-brotli = "3.4.0"
-chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
-clap = { version = "4.4.10", features = ["cargo", "string", "wrap_help"] }
-colored = "2.0.4"
-curl = "0.4.44"
-curl-sys = "0.4.68"
+base64 = "0.22.1"
+brotli = "7.0.0"
+chrono = { version = "0.4.39", default-features = false, features = ["clock"] }
+clap = { version = "4.5.26", features = ["string", "wrap_help"] }
+curl = "0.4.47"
+curl-sys = "0.4.78"
 encoding = "0.2.33"
-float-cmp = "0.9.0"
-glob = "0.3.1"
+glob = "0.3.2"
 hex = "0.4.3"
 hex-literal = "0.4.1"
-hurl_core = { version = "4.2.0-SNAPSHOT", path = "../hurl_core" }
-libflate = "2.0.0"
+hurl_core = { version = "6.1.0-SNAPSHOT", path = "../hurl_core" }
+libflate = "2.1.0"
 libxml = "0.3.3"
 md5 = "0.7.0"
 percent-encoding = "2.3.1"
-regex = "1.10.2"
-serde = "1.0.193"
-serde_json = { version= "1.0.108",features = ["arbitrary_precision"] }
+regex = "1.11.1"
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = { version = "1.0.135", features = ["arbitrary_precision"] }
 sha2 = "0.10.8"
-url = "2.5.0"
-xml-rs = { version = "0.8.19" }
-lazy_static = "1.4.0"
+url = "2.5.4"
+xml-rs = { version = "0.8.25" }
+lazy_static = "1.5.0"
 # uuid features: lets you generate random UUIDs and use a faster (but still sufficiently random) RNG
-uuid = { version = "1.6.1", features = ["v4" , "fast-rng"] }
+uuid = { version = "1.12.0", features = ["v4" , "fast-rng"] }
+similar = "2.6.0"
+terminal_size = "0.4.1"
 
 [target.'cfg(unix)'.dependencies]
-termion = "2.0.3"
+termion = "4.0.3"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1.12"
 
 [build-dependencies]
-cc = "1.0.83"
+cc = "1.2.10"
 
+[lints]
+workspace = true

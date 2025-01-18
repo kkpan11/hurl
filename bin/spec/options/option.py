@@ -1,50 +1,24 @@
 #!/usr/bin/env python3
-from typing import *
+from dataclasses import dataclass
+from typing import Optional
 
 
+@dataclass
 class Option:
-    def __init__(
-        self,
-        name,
-        long,
-        short,
-        value,
-        value_default,
-        value_parser,
-        help,
-        conflict,
-        append,
-        deprecated,
-        description,
-    ):
-        self.name = name
-        self.long = long
-        self.short = short
-        self.value = value
-        self.value_default = value_default
-        self.value_parser = value_parser
-        self.help = help
-        self.conflict = conflict
-        self.append = append
-        self.deprecated = deprecated
-        self.description = description
-
-    def __eq__(self, other):
-        if not isinstance(other, Option):
-            return False
-        return (
-            self.name == other.name
-            and self.long == other.long
-            and self.short == other.short
-            and self.value == other.value
-            and self.value_default == other.value_default
-            and self.value_parser == other.value_parser
-            and self.help == other.help
-            and self.conflict == other.conflict
-            and self.append == other.append
-            and self.deprecated == other.deprecated
-            and self.description == other.description
-        )
+    name: str
+    long: str
+    description: str
+    short: Optional[str] = None
+    value: Optional[str] = None
+    value_default: Optional[str] = None
+    value_parser: Optional[str] = None
+    help: Optional[str] = None
+    help_heading: Optional[str] = None
+    conflict: Optional[str] = None
+    append: bool = False
+    cli_only: bool = False
+    deprecated: bool = False
+    experimental: bool = False
 
     def __str__(self):
         s = "name: " + self.name
@@ -59,34 +33,24 @@ class Option:
             s += "\nvalue_parser: " + self.value_parser
         if self.help is not None:
             s += "\nhelp: " + self.help
+        if self.help_heading is not None:
+            s += "\nhelp_heading: " + self.help_heading
         if self.conflict is not None:
-            s += "\nconflict: " + self.conflict
+            s += "\nconflict: " + " ".join(self.conflict)
         if self.append:
             s += "\nmulti: append"
+        if self.cli_only:
+            s += "\ncli_only: true"
         if self.deprecated:
             s += "\ndeprecated: true"
+        if self.experimental:
+            s += "\nexperimental: true"
         s += "\n---"
         s += "\n" + self.description
         return s
 
-    def __hash__(self):
-        return hash(
-            (
-                self.name,
-                self.long,
-                self.short,
-                self.value,
-                self.value_default,
-                self.value_parser,
-                self.help,
-                self.conflict,
-                self.append,
-                self.description,
-            )
-        )
-
     @staticmethod
-    def parse(s):
+    def parse(s) -> "Option":
         name = None
         long = None
         short = None
@@ -94,10 +58,13 @@ class Option:
         value_default = None
         value_parser = None
         help = None
+        help_heading = None
         conflict = None
         append = False
+        cli_only = False
         deprecated = False
         description = ""
+        experimental = False
         in_description = False
 
         for line in s.split("\n"):
@@ -121,11 +88,24 @@ class Option:
                     value_parser = v
                 elif key == "help":
                     help = v
+                    if help.endswith("."):
+                        raise Exception(f"{name}: help should not end with period")
+                elif key == "help_heading":
+                    help_heading = v
                 elif key == "conflict":
-                    conflict = v
+                    conflict = [a.strip() for a in v.split(" ")]
                 elif key == "multi":
                     if v == "append":
                         append = True
+                elif key == "cli_only":
+                    if v == "true":
+                        cli_only = True
+                    elif v == "false":
+                        cli_only = False
+                    else:
+                        raise Exception(
+                            f"{name}: Expected true or false for cli attribute"
+                        )
                 elif key == "deprecated":
                     if v == "true":
                         deprecated = True
@@ -133,41 +113,51 @@ class Option:
                         deprecated = False
                     else:
                         raise Exception(
-                            "Expected true or false for deprecated attribute"
+                            f"{name}: Expected true or false for deprecated attribute"
+                        )
+                elif key == "experimental":
+                    if v == "true":
+                        experimental = True
+                    elif v == "false":
+                        experimental = False
+                    else:
+                        raise Exception(
+                            f"{name}: Expected true or false for experimental attribute"
                         )
                 else:
-                    raise Exception("Invalid attribute " + key)
+                    raise Exception(f"{name}: Invalid attribute " + key)
 
         if name is None:
             raise Exception("missing name attribute")
 
         if long is None:
-            raise Exception("missing long attribute")
+            raise Exception(f"{name}: missing long attribute")
 
         return Option(
-            name,
-            long,
-            short,
-            value,
-            value_default,
-            value_parser,
-            help,
-            conflict,
-            append,
-            deprecated,
-            description.strip(),
+            name=name,
+            long=long,
+            short=short,
+            value=value,
+            value_default=value_default,
+            value_parser=value_parser,
+            help=help,
+            help_heading=help_heading,
+            conflict=conflict,
+            append=append,
+            cli_only=cli_only,
+            deprecated=deprecated,
+            experimental=experimental,
+            description=description.strip(),
         )
 
     @staticmethod
-    def parse_file(filename):
-        import sys
-
-        sys.stderr.write("Parsing " + filename + "\n")
+    def parse_file(filename: str) -> "Option":
+        # sys.stderr.write("Parsing " + filename + "\n")
         s = open(filename).read()
         return Option.parse(s)
 
 
-def parse_key_value(s) -> tuple[str, str]:
+def parse_key_value(s: str) -> tuple[str, str]:
     if ":" not in s:
         raise Exception("Expecting key value")
     index = s.index(":")

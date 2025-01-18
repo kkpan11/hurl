@@ -1,6 +1,6 @@
 /*
  * Hurl (https://hurl.dev)
- * Copyright (C) 2023 Orange
+ * Copyright (C) 2024 Orange
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ mod tests {
             ),
         ];
         for (input, output) in tests.iter() {
-            assert_eq!(html_escape(input), output.to_string())
+            assert_eq!(html_escape(input), output.to_string());
         }
     }
 }
